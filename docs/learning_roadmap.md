@@ -1621,10 +1621,10 @@ Checklist qua chặng:
   - `render_user_prompt(...)`: ghép dữ liệu article vào prompt, cắt content tối đa 6000 ký tự.
   - `parse_label_json(...)`: parse JSON output robust (xử lý confidence clamp, refusal, strict=False fallback).
 - `labeling/gemini_labeler.py` (MỚI - thay thế Vertex cho labeling)
-  - `_KeyRing`: class quản lý pool API key, thread-safe, round-robin rotation.
   - `GeminiLabeler`: class chính, gọi AI Studio API.
     - `__init__(api_keys, model_chain, params, override_callable)`.
-    - `generate(system, user)`: gọi API, tự động xoay key khi quota, fallback model.
+    - `generate(system, user)`: gọi API, per-call local iteration qua keys (thread-safe, không shared state), fallback model.
+    - `_get_client(api_key)`: cache client per-key (thread-safe bằng Lock).
   - `_keys_from_env()`: đọc key từ `GEMINI_API_KEYS` hoặc `GEMINI_API_KEY`.
 - `labeling/vertex_labeler.py` (legacy, trả phí)
   - `VertexLabeler`: wrapper cũ dùng Vertex AI.
@@ -1769,63 +1769,57 @@ assert parsed.refusal_reason == "too short"
 
 **So sánh dự án:** mở `labeling/prompt.py` dòng 87-105 (`parse_label_json`). Logic gần giống.
 
-### Bài tập nhỏ 6.4 - Hiểu key rotation (KeyRing)
+### Bài tập nhỏ 6.4 - Hiểu key rotation (per-call iteration)
 
-**Yêu cầu:** viết class `KeyRing` quản lý pool API key:
+**Bối cảnh:** khi nhiều thread cùng gọi API (qua `asyncio.to_thread`), nếu dùng shared state (biến chung) để xoay key thì dễ race condition: thread A đánh dấu key 1 hết quota → thread B đang dùng key 2 nhưng bị đánh dấu nhầm. Giải pháp: mỗi lần gọi `generate()`, copy danh sách key ra biến local rồi iterate qua từng key. Thread-safe vì không chia sẻ state.
 
-- `__init__(keys)`: nhận list key.
-- `current()`: trả key đang dùng.
-- `mark_exhausted()`: đánh dấu key hiện tại hết quota, chuyển sang key tiếp theo. Nếu hết key trả `None`.
-- `reset()`: reset tất cả key về trạng thái chưa exhausted.
-- Thread-safe (dùng `threading.Lock`).
+**Yêu cầu:** viết function `try_all_keys(keys, model, call_fn)`:
+
+- Nhận list key, model name, và `call_fn(key, model)` giả lập API call.
+- Iterate qua từng key, nếu `call_fn` raise `QuotaError` thì thử key tiếp.
+- Nếu hết key mà vẫn lỗi, raise `AllKeysExhaustedError`.
+- Nếu thành công, return kết quả.
 
 **Đáp án gợi ý:**
 
 ```python
-import threading
+class QuotaError(Exception):
+    pass
 
-class KeyRing:
-    def __init__(self, keys):
-        if not keys:
-            raise ValueError("No keys provided")
-        self._keys = list(keys)
-        self._idx = 0
-        self._exhausted = set()
-        self._lock = threading.Lock()
+class AllKeysExhaustedError(Exception):
+    pass
 
-    def current(self):
-        with self._lock:
-            return self._keys[self._idx]
-
-    def mark_exhausted(self):
-        with self._lock:
-            self._exhausted.add(self._idx)
-            for offset in range(1, len(self._keys) + 1):
-                candidate = (self._idx + offset) % len(self._keys)
-                if candidate not in self._exhausted:
-                    self._idx = candidate
-                    return self._keys[candidate]
-            return None
-
-    def reset(self):
-        with self._lock:
-            self._exhausted.clear()
-            self._idx = 0
+def try_all_keys(keys, model, call_fn):
+    last_exc = None
+    for key_idx, key in enumerate(keys):
+        try:
+            return call_fn(key, model)
+        except QuotaError as exc:
+            print(f"Key #{key_idx + 1} quota hit, trying next...")
+            last_exc = exc
+            continue
+    raise AllKeysExhaustedError(f"All {len(keys)} keys exhausted. Last: {last_exc}")
 ```
 
 **Kết quả đúng:**
 
 ```python
-ring = KeyRing(["k1", "k2", "k3"])
-assert ring.current() == "k1"
-assert ring.mark_exhausted() == "k2"
-assert ring.mark_exhausted() == "k3"
-assert ring.mark_exhausted() is None  # all exhausted
-ring.reset()
-assert ring.current() == "k1"
+call_count = 0
+def fake_call(key, model):
+    global call_count
+    call_count += 1
+    if key in ("k1", "k2"):
+        raise QuotaError(f"{key} exhausted")
+    return f"OK with {key}"
+
+result = try_all_keys(["k1", "k2", "k3"], "gemini-2.5-flash", fake_call)
+assert result == "OK with k3"
+assert call_count == 3
 ```
 
-**Liên hệ dự án:** mở `labeling/gemini_labeler.py`, tìm class `_KeyRing`. Logic giống hệt.
+**Tại sao không dùng shared KeyRing?** Khi `concurrency=5`, có 5 thread gọi đồng thời. Nếu dùng shared state, thread A mark key 1 hết → thread B đang dùng key 2 nhưng bị mark nhầm → cả 3 key bị exhausted sai. Per-call iteration tránh hoàn toàn race condition này.
+
+**Liên hệ dự án:** mở `labeling/gemini_labeler.py`, tìm method `generate()`. Dòng `keys = list(self._keys)` tạo local copy, sau đó `for key_idx, api_key in enumerate(keys)` iterate qua từng key mà không chia sẻ state giữa các thread.
 
 ### Bài tập nhỏ 6.5 - Gọi AI Studio API (nếu có key)
 

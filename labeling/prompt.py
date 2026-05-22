@@ -9,8 +9,8 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 PROMPT_VERSION = "1.2.0"
-PROMPT_MODEL = "gemini-2.5-pro"
-PROMPT_PROVIDER = "vertex_ai"
+PROMPT_MODEL = "gemini-2.5-flash"
+PROMPT_PROVIDER = "aistudio"
 
 SYSTEM_PROMPT = """
 Bạn là biên tập viên báo chí tiếng Việt. Tóm tắt phải:

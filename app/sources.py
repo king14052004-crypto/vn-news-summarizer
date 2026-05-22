@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-# USER_AGENT = "vn-news-summarizer-research/0.1 (+https://github.com/khangnh22ds/vn-news-summarizer)"
+USER_AGENT = "vn-news-summarizer-research/0.1 (+https://github.com/khangnh22ds/vn-news-summarizer)"
 CRAWL_DELAY_SECONDS = 1.0
 TIMEOUT_SECONDS = 20.0
 MAX_RETRIES = 3

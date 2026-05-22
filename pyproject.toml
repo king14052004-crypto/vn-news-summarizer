@@ -21,6 +21,7 @@ dependencies = [
     "simhash>=2.1",
     "rapidfuzz>=3.10",
     "google-cloud-aiplatform>=1.74",
+    "google-genai>=1.0",
     "transformers>=4.46",
     "torch>=2.4",
     "sentencepiece>=0.2",

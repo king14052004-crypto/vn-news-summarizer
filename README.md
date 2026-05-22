@@ -4,7 +4,7 @@ Vietnamese news summarization project simplified for an AI Engineer
 intern portfolio.
 
 The current version keeps the real project story and historical results:
-RSS crawl -> Vertex AI Gemini teacher labels -> ViT5-base + LoRA
+RSS crawl -> Gemini teacher labels (AI Studio free keys) -> ViT5-base + LoRA
 fine-tuning -> FastAPI web demo. It removes the production-heavy runtime
 pieces from the main path: database, Alembic, Redis, scheduler, MLflow,
 CI/CD, and Next.js.
@@ -40,7 +40,8 @@ vn-news-summarizer/
 â”‚   â”œâ”€â”€ sources.py               # Frozen RSS source config from RSS fix commit
 â”‚   â””â”€â”€ templates/index.html
 â”œâ”€â”€ labeling/
-â”‚   â”œâ”€â”€ vertex_labeler.py        # Vertex Gemini wrapper
+â"‚   â"œâ"€â"€ gemini_labeler.py         # AI Studio Gemini (free keys + rotation)
+â”‚   â”œâ”€â”€ vertex_labeler.py        # Vertex Gemini wrapper (legacy, paid)
 â”‚   â”œâ”€â”€ prompt.py                # Prompt v1.2.0 + robust JSON parser
 â”‚   â”œâ”€â”€ qc.py                    # Deterministic QC checks
 â”‚   â”œâ”€â”€ label_dataset.py         # raw articles JSONL -> labeled JSONL
@@ -92,13 +93,29 @@ Crawl articles for labeling:
 python -m app.crawler --mode labeling --output data/raw/articles.jsonl
 ```
 
-Label with Vertex AI Gemini:
+Label with Gemini via AI Studio (free, default):
+
+```bash
+# Set one or more free API keys (get them at https://aistudio.google.com/apikey)
+export GEMINI_API_KEYS=key1,key2,key3
+
+python -m labeling.label_dataset \
+  --input data/raw/articles.jsonl \
+  --output data/labeled/labeled_articles.jsonl \
+  --concurrency 5
+```
+
+Multiple keys are rotated automatically when one hits the rate limit.
+Model fallback order: `gemini-2.5-flash` → `gemini-2.0-flash`.
+
+To use the legacy Vertex AI backend instead:
 
 ```bash
 python -m labeling.label_dataset \
   --input data/raw/articles.jsonl \
   --output data/labeled/labeled_articles.jsonl \
-  --concurrency 5
+  --concurrency 5 \
+  --backend vertex
 ```
 
 Export train/val/test splits:

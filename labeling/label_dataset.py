@@ -1,4 +1,4 @@
-"""Label crawled JSONL articles with Vertex Gemini and deterministic QC."""
+"""Label crawled JSONL articles with Gemini (AI Studio or Vertex) and deterministic QC."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from labeling.prompt import (
     render_user_prompt,
 )
 from labeling.qc import run_qc
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
 from labeling.vertex_labeler import VertexLabeler, VertexLLMError, VertexTransientError
 
 
@@ -42,7 +43,7 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 async def _label_one(
     row: dict[str, Any],
     *,
-    labeler: VertexLabeler,
+    labeler: VertexLabeler | GeminiLabeler,
     semaphore: asyncio.Semaphore,
 ) -> dict[str, Any]:
     user_prompt = render_user_prompt(
@@ -69,7 +70,7 @@ async def _label_one(
             "qc_passed": qc.passed,
             "qc_details": qc.to_dict(),
         }
-    except (VertexLLMError, VertexTransientError, ValueError) as exc:
+    except (VertexLLMError, VertexTransientError, GeminiLLMError, GeminiTransientError, ValueError) as exc:
         return {
             **row,
             "summary": "",
@@ -87,9 +88,14 @@ async def label_rows(
     *,
     concurrency: int = 5,
     limit: int | None = None,
-    labeler: VertexLabeler | None = None,
+    labeler: VertexLabeler | GeminiLabeler | None = None,
+    backend: str = "aistudio",
 ) -> list[dict[str, Any]]:
-    labeler = labeler or VertexLabeler(model_name=PROMPT_MODEL, params=GenerationParams())
+    if labeler is None:
+        if backend == "vertex":
+            labeler = VertexLabeler(model_name=PROMPT_MODEL, params=GenerationParams())
+        else:
+            labeler = GeminiLabeler(params=GenerationParams())
     semaphore = asyncio.Semaphore(max(concurrency, 1))
     work = rows[:limit] if limit is not None else rows
     tasks = [_label_one(row, labeler=labeler, semaphore=semaphore) for row in work]
@@ -97,17 +103,25 @@ async def label_rows(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Label crawled articles with Vertex Gemini")
+    parser = argparse.ArgumentParser(description="Label crawled articles with Gemini")
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--concurrency", type=int, default=5)
+    parser.add_argument(
+        "--backend",
+        choices=["aistudio", "vertex"],
+        default="aistudio",
+        help="LLM backend: 'aistudio' (free API key) or 'vertex' (GCP project).",
+    )
     return parser
 
 
 async def _run_cli(args: argparse.Namespace) -> int:
     rows = read_jsonl(args.input)
-    labeled = await label_rows(rows, concurrency=args.concurrency, limit=args.limit)
+    labeled = await label_rows(
+        rows, concurrency=args.concurrency, limit=args.limit, backend=args.backend
+    )
     write_jsonl(args.output, labeled)
     passed = sum(1 for row in labeled if row.get("qc_passed") is True)
     print(

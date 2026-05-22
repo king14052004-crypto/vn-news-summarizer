@@ -1,1662 +1,529 @@
-﻿# Lộ Trình Học Để Tự Code Lại `vn-news-summarizer`
+# Lộ Trình Học Để Tự Code Lại `vn-news-summarizer`
 
-Tài liệu này dành cho người mới học, chưa cần biết trước cấu trúc dự án. Mục tiêu không phải là học thuộc code hiện có, mà là hiểu từng mảnh nhỏ rồi tự code lại được toàn bộ pipeline: crawl tin tức, tạo nhãn bằng Gemini (AI Studio), kiểm tra chất lượng dữ liệu, chia dataset, fine-tune ViT5 + LoRA, load model để inference, và chạy web demo bằng FastAPI.
+Tài liệu này dành cho người mới học. Mục tiêu: hiểu từng mảnh nhỏ rồi **tự code lại được toàn bộ dự án**, từng file, từng dòng.
 
-Dự án sau khi đơn giản hóa có các phần chính:
+**Nguyên tắc:**
+- Mỗi chặng dạy một nhóm kiến thức.
+- Có bài tập nhỏ (có lời giải) giúp bạn nắm kiến thức.
+- **Bài cuối chặng = code lại file .py thật trong dự án.** Nếu file đó dùng kiến thức từ chặng trước, bài cuối yêu cầu code lại toàn bộ file (tích lũy kiến thức).
+- Cuối lộ trình bạn có thể code lại 100% dự án.
 
-```text
-vn-news-summarizer/
-├── app/                         # Web demo, crawler, inference model
-│   ├── main.py                  # FastAPI routes
-│   ├── crawler.py               # Crawl RSS, extract article text, write JSONL
-│   ├── schemas.py               # Kiểu dữ liệu dùng chung
-│   ├── sources.py               # Cấu hình nguồn báo
-│   ├── summarizer.py            # Load ViT5/LoRA và summarize
-│   └── templates/index.html     # Giao diện bấm nút tóm tắt
-├── labeling/                    # Pipeline tạo nhãn và dataset
-│   ├── prompt.py                # Prompt, parser JSON output từ Gemini
-│   ├── gemini_labeler.py        # Gọi AI Studio Gemini (free key, xoay vòng)
-│   ├── vertex_labeler.py        # Gọi Vertex AI Gemini (legacy, trả phí)
-│   ├── label_dataset.py         # Đọc bài raw, gọi labeler, ghi JSONL
-│   ├── qc.py                    # Kiểm tra chất lượng summary
-│   └── split_dataset.py         # Chia train/val/test
-├── notebooks/finetune_vit5_lora.ipynb
-├── data/                        # Dữ liệu local, thường bị .gitignore
-├── docs/                        # Report và tài liệu học
-├── Dockerfile
-└── docker-compose.yml
-```
+**Danh sách file trong dự án (theo thứ tự học):**
 
-## Cách Học Để Không Bị Ngợp
-
-1. Mỗi chặng chỉ học đúng một nhóm kiến thức.
-2. Làm bài tập nhỏ trước, không mở code dự án để copy.
-3. Sau khi làm được bài nhỏ, mới mở file dự án để so sánh ý tưởng.
-4. Cuối mỗi chặng có một bài "code lại phần dự án" với yêu cầu cụ thể.
-5. Nếu mắc lỗi, ghi lại lỗi, command đã chạy, input đã dùng, output mong đợi.
-6. Chỉ sang chặng tiếp theo khi checklist cuối chặng đã đạt.
-
-Quy ước trong tài liệu:
-
-- **Bài tập nhỏ:** dùng dữ liệu giả, mục tiêu là hiểu kỹ thuật.
-- **Đáp án/kết quả đúng:** không nhất thiết là code duy nhất, nhưng output phải giống.
-- **Bài cuối chặng:** mô phỏng lại function/file thật trong dự án, mô tả như thể bạn chưa đọc repo.
-- **Không copy:** bạn có thể nhìn lại đáp án sau khi tự thử ít nhất 20-30 phút.
-- **So sánh dự án:** sau mỗi bài cuối chặng, mở file tương ứng trong dự án để so sánh cách tiếp cận.
+| File | Dòng | Chặng học |
+|------|------|-----------|
+| `app/schemas.py` | 64 | 1 |
+| `app/sources.py` | 189 | 2 |
+| `labeling/prompt.py` | 105 | 3 |
+| `labeling/qc.py` | 153 | 4 |
+| `labeling/gemini_labeler.py` | 182 | 5 |
+| `labeling/label_dataset.py` | 133 | 6 |
+| `labeling/split_dataset.py` | 100 | 7 |
+| `app/crawler.py` | 514 | 8-9 |
+| `app/summarizer.py` | 138 | 10 |
+| `app/main.py` | 66 | 11 |
+| `app/templates/index.html` | 140 | 11 |
 
 ---
 
-## Chặng 0 - Nền Tảng Python Cho Dự Án
+## Chặng 0 — Nền Tảng Python
 
-**Mục tiêu:** hiểu cách một project Python được chia thành nhiều file, biết đọc/ghi dữ liệu JSONL, biết chạy file bằng command line, hiểu biến môi trường.
+**Mục tiêu:** nắm vững cú pháp Python cần dùng trong dự án.
 
-### Bạn cần hiểu gì?
+### Lý thuyết
 
-- `module` là một file Python, ví dụ `crawler.py`.
-- `package` là một thư mục có `__init__.py`, ví dụ `app/`, `labeling/`.
-- `import` giúp dùng code từ file khác. Ví dụ: `from app.schemas import CrawledArticle`.
-- `python -m app.crawler` nghĩa là chạy module `crawler.py` nằm trong package `app`.
-- JSON là một object/list dữ liệu.
-- JSONL là nhiều dòng JSON, mỗi dòng là một record riêng. Dự án dùng JSONL thay database vì đơn giản, dễ append, dễ debug.
-- `Path` (từ `pathlib`) giúp code chạy ổn hơn trên Windows/Linux vì tự xử lý `/` và `\`.
-- `argparse` giúp tạo command có tham số như `--input`, `--output`, `--limit`.
-- **Biến môi trường (env var)** là cách truyền cấu hình cho chương trình mà không sửa code:
-  - Đặt trong file `.env` hoặc `export KEY=value` trong terminal.
-  - Đọc bằng `os.environ.get("KEY", "default_value")`.
-  - Dự án dùng `.env.example` làm mẫu; copy thành `.env` rồi điền giá trị thật.
+**1. Module và package:**
+- File `.py` = module. Thư mục có `__init__.py` = package.
+- `from app.schemas import ArticleCandidate` → Python tìm `app/schemas.py`, lấy class `ArticleCandidate`.
+- `__init__.py` có thể rỗng, chỉ cần tồn tại để Python nhận thư mục là package.
 
-### File/function trong dự án liên quan
+**2. Type hints:**
+- `def word_count(text: str) -> int:` — tham số `text` kiểu `str`, trả về `int`.
+- `str | None` = có thể là `str` hoặc `None`.
+- `list[str]` = danh sách các chuỗi.
+- `dict[str, Any]` = dict key là `str`, value là bất kỳ.
+- `from __future__ import annotations` — cho phép dùng `str | None` thay vì `Optional[str]` trên Python < 3.10.
 
-- `app/__init__.py`, `labeling/__init__.py`: file rỗng hoặc chứa docstring, đánh dấu thư mục là package.
-- `app/schemas.py`: định nghĩa object dữ liệu dùng giữa crawler, API, summarizer.
-- `labeling/split_dataset.py`: có helper `read_jsonl()`, `write_jsonl()`, CLI.
-- `app/crawler.py`: có `_build_parser()`, `_run_cli()`, `main()` để chạy crawler bằng command.
-- `.env.example`: mẫu cấu hình dự án.
+**3. f-string:**
+- `f"Đã crawl {count} bài"` — chèn biến `count` vào chuỗi.
 
-### Bài tập nhỏ 0.1 - Viết và đọc file text
-
-**Yêu cầu:** tạo file `practice_file.py` có 2 function:
-
-- `write_text(path, text)`: ghi chuỗi vào file.
-- `read_text(path)`: đọc lại chuỗi từ file.
-
-Chạy thử:
-
-```bash
-python practice_file.py
-```
-
-**Đáp án gợi ý:**
-
-```python
-from pathlib import Path
-
-def write_text(path, text):
-    Path(path).write_text(text, encoding="utf-8")
-
-def read_text(path):
-    return Path(path).read_text(encoding="utf-8")
-
-write_text("hello.txt", "Xin chao")
-print(read_text("hello.txt"))
-```
-
-**Kết quả đúng:** terminal in ra `Xin chao`, thư mục có file `hello.txt`.
-
-### Bài tập nhỏ 0.2 - JSON khác JSONL
-
-**Yêu cầu:** tạo 3 học sinh:
-
-```python
-students = [
-    {"id": 1, "name": "An", "score": 8.5},
-    {"id": 2, "name": "Binh", "score": 7.0},
-    {"id": 3, "name": "Chi", "score": 9.0},
-]
-```
-
-Ghi ra 2 file:
-
-- `students.json`: một list JSON lớn.
-- `students.jsonl`: mỗi học sinh là một dòng JSON.
-
-**Đáp án gợi ý:**
-
+**4. Đọc/ghi JSONL:**
 ```python
 import json
 from pathlib import Path
 
-Path("students.json").write_text(
-    json.dumps(students, ensure_ascii=False, indent=2),
-    encoding="utf-8",
-)
-
-with Path("students.jsonl").open("w", encoding="utf-8") as f:
-    for row in students:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
-```
-
-**Kết quả đúng:**
-
-- `students.json` nhìn giống một list có dấu `[` và `]`.
-- `students.jsonl` có đúng 3 dòng.
-- Mỗi dòng trong `students.jsonl` tự parse được bằng `json.loads()`.
-
-### Bài tập nhỏ 0.3 - Tạo CLI đơn giản
-
-**Yêu cầu:** tạo file `practice_cli.py`, chạy được:
-
-```bash
-python practice_cli.py --name An --repeat 3
-```
-
-Output mong muốn:
-
-```text
-Hello An
-Hello An
-Hello An
-```
-
-**Đáp án gợi ý:**
-
-```python
-import argparse
-
-def build_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True)
-    parser.add_argument("--repeat", type=int, default=1)
-    return parser
-
-def main():
-    args = build_parser().parse_args()
-    for _ in range(args.repeat):
-        print(f"Hello {args.name}")
-
-if __name__ == "__main__":
-    main()
-```
-
-### Bài tập nhỏ 0.4 - Đọc biến môi trường
-
-**Yêu cầu:** tạo file `practice_env.py`:
-
-- Đọc biến `MY_NAME` từ môi trường. Nếu không có, dùng `"World"`.
-- In ra `Hello <MY_NAME>`.
-
-**Đáp án gợi ý:**
-
-```python
-import os
-
-name = os.environ.get("MY_NAME", "World")
-print(f"Hello {name}")
-```
-
-**Command tự kiểm tra:**
-
-```bash
-python practice_env.py           # In: Hello World
-MY_NAME=An python practice_env.py  # In: Hello An
-```
-
-**Liên hệ dự án:** mở file `.env.example` trong dự án, bạn sẽ thấy các biến như `HF_MODEL_ID`, `GEMINI_API_KEYS`, `MAX_ARTICLES_PER_DEMO`. Tất cả đều được đọc bằng `os.environ.get(...)` trong code.
-
-### Bài tập nhỏ 0.5 - Hiểu `__init__.py` và package import
-
-**Yêu cầu:** tạo cấu trúc:
-
-```text
-mypackage/
-├── __init__.py   (nội dung: rỗng hoặc chỉ có docstring)
-└── utils.py      (nội dung: hàm greet(name))
-```
-
-Viết `test_import.py` ở bên ngoài `mypackage/`:
-
-```python
-from mypackage.utils import greet
-print(greet("An"))
-```
-
-**Đáp án gợi ý:**
-
-`mypackage/__init__.py`:
-
-```python
-"""My practice package."""
-```
-
-`mypackage/utils.py`:
-
-```python
-def greet(name):
-    return f"Hello {name}"
-```
-
-**Kết quả đúng:** `python test_import.py` in ra `Hello An`.
-
-**Liên hệ dự án:** dự án có `app/__init__.py` và `labeling/__init__.py` để Python hiểu đây là package. Khi chạy `python -m app.crawler`, Python tìm `app/crawler.py` nhờ `__init__.py` đánh dấu `app/` là package.
-
-### Bài cuối chặng 0 - Code lại helper JSONL cho dự án
-
-**Bối cảnh:** dự án cần lưu bài báo, nhãn, dataset bằng JSONL vì dễ đọc, dễ append, không cần database.
-
-**File tự tạo:** `practice_jsonl.py`.
-
-**Yêu cầu cụ thể:**
-
-1. Viết `write_jsonl(path, rows)`:
-   - `path` có thể là string hoặc `Path`.
-   - `rows` là list dict.
-   - Tự tạo thư mục cha nếu chưa tồn tại (`Path(path).parent.mkdir(parents=True, exist_ok=True)`).
-   - Ghi mỗi dict thành 1 dòng JSON.
-   - Dùng `ensure_ascii=False` để giữ tiếng Việt.
-2. Viết `read_jsonl(path)`:
-   - Trả về list dict.
-   - Bỏ qua dòng trống.
-   - Nếu file không tồn tại thì trả list rỗng.
-3. Trong `main`, tạo 3 record học sinh, ghi `data/practice/students.jsonl`, đọc lại và in số dòng.
-
-**Code khung:**
-
-```python
-from pathlib import Path
-import json
-
-def write_jsonl(path, rows):
-    # TODO
-    pass
-
-def read_jsonl(path):
-    # TODO
-    pass
-
-def main():
-    rows = [
-        {"id": 1, "name": "An", "score": 8.5},
-        {"id": 2, "name": "Binh", "score": 7.0},
-        {"id": 3, "name": "Chi", "score": 9.0},
-    ]
-    write_jsonl("data/practice/students.jsonl", rows)
-    loaded = read_jsonl("data/practice/students.jsonl")
-    print(len(loaded))
-
-if __name__ == "__main__":
-    main()
-```
-
-**Đáp án gợi ý:**
-
-```python
-from pathlib import Path
-import json
-
-def write_jsonl(path, rows):
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-def read_jsonl(path):
-    p = Path(path)
-    if not p.exists():
-        return []
+def read_jsonl(path: Path) -> list[dict]:
     rows = []
-    with p.open("r", encoding="utf-8") as f:
-        for line in f:
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
             line = line.strip()
             if line:
                 rows.append(json.loads(line))
     return rows
 
+def write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False))
+            fh.write("\n")
+```
+
+**Tại sao `ensure_ascii=False`?** Vì dữ liệu tiếng Việt. Nếu `True`, "Hà Nội" → `"H\\u00e0 N\\u1ed9i"`.
+
+**5. `pathlib.Path`:**
+```python
+from pathlib import Path
+p = Path("data/raw/articles.jsonl")
+p.parent  # Path("data/raw")
+p.parent.mkdir(parents=True, exist_ok=True)  # tạo thư mục nếu chưa có
+p.open("r", encoding="utf-8")  # mở file
+```
+
+**6. argparse (CLI):**
+```python
+import argparse
+
+parser = argparse.ArgumentParser(description="My tool")
+parser.add_argument("--input", type=Path, required=True)
+parser.add_argument("--limit", type=int, default=None)
+args = parser.parse_args()
+print(args.input, args.limit)
+```
+
+**7. Biến môi trường:**
+```python
+import os
+value = os.environ.get("GEMINI_API_KEYS", "").strip()
+# Trả "" nếu biến không tồn tại
+```
+
+### Bài tập 0.1 — Đọc ghi JSONL
+
+**Yêu cầu:** Viết 2 function `read_jsonl(path)` và `write_jsonl(path, rows)` hoạt động như trên. Test:
+
+```python
+from pathlib import Path
+rows = [{"title": "Tin A", "content": "Nội dung A"}, {"title": "Tin B", "content": "Nội dung B"}]
+write_jsonl(Path("/tmp/test.jsonl"), rows)
+loaded = read_jsonl(Path("/tmp/test.jsonl"))
+assert loaded == rows
+```
+
+### Bài tập 0.2 — argparse CLI đọc JSONL
+
+**Yêu cầu:** Viết CLI nhận `--input` (Path, required) và `--limit` (int, optional). Đọc JSONL, in `limit` dòng đầu (hoặc tất cả nếu không có limit).
+
+**Đáp án:**
+
+```python
+import argparse, json
+from pathlib import Path
+
 def main():
-    rows = [
-        {"id": 1, "name": "An", "score": 8.5},
-        {"id": 2, "name": "Binh", "score": 7.0},
-        {"id": 3, "name": "Chi", "score": 9.0},
-    ]
-    write_jsonl("data/practice/students.jsonl", rows)
-    loaded = read_jsonl("data/practice/students.jsonl")
-    print(len(loaded))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--limit", type=int, default=None)
+    args = parser.parse_args()
+    rows = []
+    with args.input.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    for row in rows[:args.limit]:
+        print(json.dumps(row, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()
 ```
 
-**Kết quả đúng:**
+### Bài tập 0.3 — Biến môi trường
 
-```bash
-python practice_jsonl.py
-# 3
+**Yêu cầu:** Viết function `get_keys()` đọc `GEMINI_API_KEYS` (comma-separated) hoặc `GEMINI_API_KEY` (single). Nếu cả hai đều không có, raise `RuntimeError`.
+
+**Đáp án:**
+
+```python
+import os
+
+def get_keys() -> list[str]:
+    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
+    if raw:
+        return [k.strip() for k in raw.split(",") if k.strip()]
+    single = os.environ.get("GEMINI_API_KEY", "").strip()
+    if single:
+        return [single]
+    raise RuntimeError("Set GEMINI_API_KEYS or GEMINI_API_KEY")
 ```
 
-**So sánh dự án:** mở `labeling/split_dataset.py` dòng 25-39 và `labeling/label_dataset.py` dòng 24-39 để thấy `read_jsonl()` và `write_jsonl()` tương tự.
-
-Checklist qua chặng:
-
-- Bạn giải thích được JSONL là gì và vì sao dataset dùng JSONL thay vì database.
-- Bạn hiểu `__init__.py` dùng để làm gì.
-- Bạn tự viết được `read_jsonl()` và `write_jsonl()`.
-- Bạn biết đọc biến môi trường bằng `os.environ.get()`.
-- Bạn chạy được file bằng `python file.py` và `python -m package.module`.
+**So sánh dự án:** Mở `labeling/gemini_labeler.py`, function `_keys_from_env()` — logic giống hệt.
 
 ---
 
-## Chặng 1 - Data Schema Và Source Config
+## Chặng 1 — Data Schemas (`app/schemas.py`)
 
-**Mục tiêu:** hiểu dữ liệu đi qua pipeline có hình dạng gì và vì sao cần cấu hình nguồn báo rõ ràng.
+**Mục tiêu:** hiểu `dataclass`, `Pydantic BaseModel`, `slots=True`, `frozen=True`. Code lại `app/schemas.py`.
 
-### Bạn cần hiểu gì?
+### Lý thuyết
 
-- Nếu truyền dict lung tung, rất dễ sai key như `content`, `content_text`, `article_text`.
-- `dataclass` giúp gom dữ liệu thành object rõ field, Python tự tạo `__init__`, `__repr__`.
-- `@dataclass(slots=True)` tiết kiệm bộ nhớ hơn.
-- `frozen=True` làm object khó bị sửa nhầm sau khi tạo (immutable).
-- `str | None` nghĩa là field có thể là chuỗi hoặc không có giá trị.
-- **Pydantic `BaseModel`** khác `dataclass`:
-  - Pydantic validate dữ liệu khi tạo object (ví dụ: `confidence` phải >= 0.0, <= 1.0).
-  - Pydantic có `.model_dump()` để chuyển thành dict.
-  - FastAPI dùng Pydantic để validate request/response.
-- Source config giúp crawler biết báo nào enabled, RSS URL nào cần đọc, domain nào hợp lệ.
-
-### File/function trong dự án
-
-- `app/schemas.py`
-  - `ArticleCandidate`: bài báo mới lấy từ RSS, chưa fetch HTML. Có `source`, `source_name`, `url`, `title`, `published_at`, `category`, `author`.
-  - `CrawledArticle`: bài báo đã có `content_text`. Có thêm `article_id`, `word_count`, `url_hash`. Có method `to_jsonl_record()`.
-  - `SummaryItem`: response item trả về web/API (Pydantic).
-  - `SummarizeResponse`, `HealthResponse`: Pydantic response models cho FastAPI.
-- `app/sources.py`
-  - `USER_AGENT`: chuỗi User-Agent cho HTTP request.
-  - `CRAWL_DELAY_SECONDS`, `TIMEOUT_SECONDS`, `MAX_RETRIES`: hằng số cấu hình.
-  - `NewsSource`: dataclass cấu hình một nguồn tin (id, name, domain, rss, enabled, max_items_per_feed).
-  - `SOURCES`: danh sách nguồn chuẩn (VnExpress, Tuoi Tre, Thanh Nien, VietnamNet, Dan Tri, Znews, VTC News, Lao Dong).
-  - `CANONICAL_CATEGORIES`: dict map category thô sang category chuẩn.
-  - `enabled_sources(only)`: lọc nguồn đang bật.
-  - `canonical_category(raw)`: chuẩn hóa category.
-
-### Bài tập nhỏ 1.1 - Dataclass đầu tiên
-
-**Yêu cầu:** tạo `practice_dataclass.py`, định nghĩa `Student` có:
-
-- `id: str`
-- `name: str`
-- `score: float`
-- `email: str | None = None`
-
-Tạo một student và in ra `name`.
-
-**Đáp án gợi ý:**
-
+**1. `dataclass`:**
 ```python
 from dataclasses import dataclass
 
-@dataclass(frozen=True)
-class Student:
-    id: str
+@dataclass
+class Person:
     name: str
-    score: float
-    email: str | None = None
-
-student = Student(id="s1", name="An", score=8.5)
-print(student.name)
+    age: int
 ```
+Python tự tạo `__init__`, `__repr__`, `__eq__`.
 
-**Kết quả đúng:** in ra `An`.
-
-### Bài tập nhỏ 1.2 - Pydantic response model
-
-**Yêu cầu:** tạo model `StudentResponse` bằng `pydantic.BaseModel` có `id`, `name`, `passed`. Tạo object và gọi `.model_dump()`.
-
-**Đáp án gợi ý:**
-
+**2. `slots=True`:** tiết kiệm bộ nhớ, không cho thêm attribute mới ngoài khai báo.
 ```python
-from pydantic import BaseModel
-
-class StudentResponse(BaseModel):
-    id: str
+@dataclass(slots=True)
+class Person:
     name: str
-    passed: bool
-
-response = StudentResponse(id="s1", name="An", passed=True)
-print(response.model_dump())
 ```
+`Person("A").x = 1` → `AttributeError`.
 
-**Kết quả đúng:** output là dict `{"id": "s1", "name": "An", "passed": True}`.
-
-### Bài tập nhỏ 1.3 - Pydantic với Field validation
-
-**Yêu cầu:** tạo `ScoreItem` có:
-
-- `name: str`
-- `score: float` phải >= 0 và <= 10 (dùng `Field(ge=0, le=10)`)
-- `tags: list[str]` mặc định rỗng (dùng `Field(default_factory=list)`)
-
-Thử tạo object với `score=15` và quan sát lỗi.
-
-**Đáp án gợi ý:**
-
+**3. `frozen=True`:** immutable, không cho sửa attribute sau khi tạo.
 ```python
-from pydantic import BaseModel, Field, ValidationError
-
-class ScoreItem(BaseModel):
-    name: str
-    score: float = Field(ge=0, le=10)
-    tags: list[str] = Field(default_factory=list)
-
-good = ScoreItem(name="An", score=8.5)
-print(good.model_dump())
-
-try:
-    bad = ScoreItem(name="Binh", score=15)
-except ValidationError as e:
-    print("Validation error:", e.error_count(), "errors")
+@dataclass(slots=True, frozen=True)
+class Point:
+    x: int
+    y: int
 ```
+`Point(1, 2).x = 3` → `FrozenInstanceError`.
 
-**Kết quả đúng:** object `good` tạo thành công; `bad` raise `ValidationError`.
-
-**Liên hệ dự án:** mở `labeling/prompt.py` dòng 61-65, class `LabelOutput` dùng `Field(default=0.0, ge=0.0, le=1.0)` cho `confidence`. Mở `app/schemas.py` dòng 56-58, `SummarizeResponse` dùng `Field(ge=0)` cho `total`.
-
-### Bài tập nhỏ 1.4 - Source config đơn giản
-
-**Yêu cầu:** tạo `BookSource`:
-
+**4. Pydantic `BaseModel`:**
 ```python
-@dataclass(frozen=True)
-class BookSource:
-    id: str
-    name: str
-    urls: tuple[str, ...]
-    enabled: bool = True
+from pydantic import BaseModel, Field
+
+class SummaryItem(BaseModel):
+    title: str
+    source: str
+    url: str
+    published_at: str | None = None
+    summary: str
 ```
+- Tự validate type khi tạo: `SummaryItem(title=123, ...)` → tự ép thành `"123"` hoặc raise `ValidationError`.
+- `Field(ge=0)` = giá trị >= 0.
 
-Tạo 4 source, trong đó 1 source `enabled=False`. Viết `enabled_sources(only=None)`.
+**5. Khi nào dùng `dataclass` vs `BaseModel`?**
+- `dataclass`: dữ liệu nội bộ, không cần validate từ bên ngoài (user input, JSON).
+- `BaseModel`: dữ liệu từ bên ngoài (API response, JSON từ LLM) cần validate.
 
-**Đáp án gợi ý:**
+### Bài tập 1.1 — dataclass cơ bản
+
+**Yêu cầu:** Tạo `ArticleCandidate` với:
+- `source: str`, `source_name: str`, `url: str`, `title: str`
+- `published_at: datetime | None = None`, `category: str | None = None`, `author: str | None = None`
+- `slots=True, frozen=True`
+
+**Đáp án:**
 
 ```python
 from dataclasses import dataclass
+from datetime import datetime
 
-@dataclass(frozen=True)
-class BookSource:
+@dataclass(slots=True, frozen=True)
+class ArticleCandidate:
+    source: str
+    source_name: str
+    url: str
+    title: str
+    published_at: datetime | None = None
+    category: str | None = None
+    author: str | None = None
+```
+
+### Bài tập 1.2 — dataclass với method
+
+**Yêu cầu:** Tạo `CrawledArticle` có method `to_jsonl_record()` trả dict chỉ gồm `article_id, source, url, title, category, published_at, content_text`.
+
+**Đáp án:**
+
+```python
+@dataclass(slots=True, frozen=True)
+class CrawledArticle:
+    article_id: int
+    source: str
+    source_name: str
+    url: str
+    title: str
+    category: str | None
+    published_at: str | None
+    author: str | None
+    content_text: str
+    word_count: int
+    url_hash: str
+
+    def to_jsonl_record(self) -> dict[str, object]:
+        return {
+            "article_id": self.article_id,
+            "source": self.source,
+            "url": self.url,
+            "title": self.title,
+            "category": self.category,
+            "published_at": self.published_at,
+            "content_text": self.content_text,
+        }
+```
+
+### Bài tập 1.3 — Pydantic BaseModel
+
+**Yêu cầu:** Tạo `SummaryItem`, `SummarizeResponse`, `HealthResponse` dùng Pydantic.
+
+**Đáp án:**
+
+```python
+from pydantic import BaseModel, Field
+
+class SummaryItem(BaseModel):
+    title: str
+    source: str
+    url: str
+    published_at: str | None = None
+    summary: str
+
+class SummarizeResponse(BaseModel):
+    date: str
+    total: int = Field(ge=0)
+    items: list[SummaryItem]
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+```
+
+### 🎯 Bài cuối chặng 1 — Code lại `app/schemas.py`
+
+**Yêu cầu:** Tạo file `app/schemas.py` (64 dòng) chứa đầy đủ:
+- `from __future__ import annotations`
+- `ArticleCandidate` (dataclass, frozen, slots) — 7 fields
+- `CrawledArticle` (dataclass, frozen, slots) — 11 fields + `to_jsonl_record()`
+- `SummaryItem` (BaseModel) — 5 fields
+- `SummarizeResponse` (BaseModel) — `date`, `total` (Field ge=0), `items`
+- `HealthResponse` (BaseModel) — `status`, `version`
+
+**Kiểm tra:** So với `app/schemas.py` trong dự án — phải giống 100%.
+
+---
+
+## Chặng 2 — Source Config (`app/sources.py`)
+
+**Mục tiêu:** hiểu frozen config pattern, dict-based normalization, `field(default_factory=list)`. Code lại `app/sources.py`.
+
+### Lý thuyết
+
+**1. Config dạng frozen dataclass:**
+Thay vì YAML/JSON, dự án "đóng băng" cấu hình RSS nguồn báo thành Python code. Lý do: đơn giản, type-safe, không cần đọc file.
+
+```python
+@dataclass(slots=True, frozen=True)
+class NewsSource:
     id: str
     name: str
-    urls: tuple[str, ...]
+    domain: str
+    rss: list[str]
     enabled: bool = True
-
-SOURCES = [
-    BookSource(id="a", name="Alpha", urls=("http://a.com/1",)),
-    BookSource(id="b", name="Beta", urls=("http://b.com/1",)),
-    BookSource(id="c", name="Gamma", urls=("http://c.com/1",), enabled=False),
-    BookSource(id="d", name="Delta", urls=("http://d.com/1",)),
-]
-
-def enabled_sources(only=None):
-    selected = []
-    only_set = set(only) if only else None
-    for source in SOURCES:
-        if not source.enabled:
-            continue
-        if only_set is not None and source.id not in only_set:
-            continue
-        selected.append(source)
-    return selected
+    max_items_per_feed: int | None = None
 ```
 
-**Kết quả đúng:**
+**2. Category normalization:**
+Mỗi báo gọi chuyên mục khác nhau ("thời sự" vs "thoi-su" vs "xa-hoi"). Dự án map tất cả về một tên chuẩn:
 
 ```python
-assert len(enabled_sources()) == 3
-assert enabled_sources({"missing"}) == []
-```
-
-### Bài tập nhỏ 1.5 - Chuẩn hóa category
-
-**Yêu cầu:** viết `normalize_category(raw)`:
-
-- `"sci-fi"` và `"science fiction"` thành `"fiction"`.
-- `"biz"` và `"business"` thành `"business"`.
-- `None` trả `None`.
-- Text lạ thì lowercase và strip.
-
-**Đáp án gợi ý:**
-
-```python
-CATEGORY_MAP = {
-    "sci-fi": "fiction",
-    "science fiction": "fiction",
-    "biz": "business",
-    "business": "business",
+CANONICAL_CATEGORIES = {
+    "thoi_su": ["thời sự", "thoi su", "thoi-su", "xa-hoi", ...],
+    "kinh_doanh": ["kinh doanh", "kinh-doanh", "kinh tế", ...],
+    ...
 }
 
-def normalize_category(raw):
-    if raw is None:
+def canonical_category(raw: str | None) -> str | None:
+    if not raw:
         return None
-    key = raw.strip().lower()
-    return CATEGORY_MAP.get(key, key or None)
+    needle = raw.lower()
+    for key, aliases in CANONICAL_CATEGORIES.items():
+        if any(alias in needle or needle in alias for alias in aliases):
+            return key
+    return None
 ```
 
-**Liên hệ dự án:** mở `app/sources.py` dòng 154-189. Dự án dùng `CANONICAL_CATEGORIES` dict với logic phức tạp hơn: kiểm tra alias chứa trong needle hoặc needle chứa trong alias. Bạn sẽ thấy pattern tương tự.
+**3. `field(default_factory=list)`:**
+Khi default value là mutable (list, dict), phải dùng `default_factory`:
+```python
+from dataclasses import dataclass, field
 
-### Bài tập nhỏ 1.6 - Method `to_dict()` trên dataclass
+@dataclass(slots=True)
+class CrawlStats:
+    discovered: int = 0
+    errors: list[str] = field(default_factory=list)
+```
+Nếu viết `errors: list[str] = []` → tất cả instance chia sẻ cùng list (bug).
 
-**Yêu cầu:** thêm method `to_dict()` cho `Student` dataclass, trả dict chỉ chứa field có giá trị (bỏ field `None`).
+**4. Constants:**
+```python
+USER_AGENT = "vn-news-summarizer-research/0.1 (...)"
+CRAWL_DELAY_SECONDS = 1.0
+TIMEOUT_SECONDS = 20.0
+MAX_RETRIES = 3
+```
 
-**Đáp án gợi ý:**
+### Bài tập 2.1 — NewsSource dataclass
+
+**Yêu cầu:** Tạo `NewsSource` và `SOURCES` list chứa ít nhất 2 nguồn báo (VnExpress, Tuoi Tre) với RSS URLs thật.
+
+**Đáp án:**
 
 ```python
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 
-@dataclass(frozen=True)
-class Student:
+@dataclass(slots=True, frozen=True)
+class NewsSource:
     id: str
     name: str
-    score: float
-    email: str | None = None
+    domain: str
+    rss: list[str]
+    enabled: bool = True
+    max_items_per_feed: int | None = None
 
-    def to_dict(self):
-        return {f.name: getattr(self, f.name) for f in fields(self) if getattr(self, f.name) is not None}
-
-student = Student(id="s1", name="An", score=8.5)
-print(student.to_dict())
-# {"id": "s1", "name": "An", "score": 8.5}
+SOURCES = [
+    NewsSource(
+        id="vnexpress", name="VnExpress", domain="vnexpress.net",
+        rss=["https://vnexpress.net/rss/tin-moi-nhat.rss", "https://vnexpress.net/rss/thoi-su.rss"],
+    ),
+    NewsSource(
+        id="tuoitre", name="Tuoi Tre Online", domain="tuoitre.vn",
+        rss=["https://tuoitre.vn/rss/tin-moi-nhat.rss"],
+    ),
+]
 ```
 
-**Liên hệ dự án:** mở `app/schemas.py` dòng 36-45, `CrawledArticle.to_jsonl_record()` chọn các field cần cho JSONL output.
+### Bài tập 2.2 — canonical_category
 
-### Bài cuối chặng 1 - Code lại schema và source config kiểu dự án
-
-**Bối cảnh:** crawler cần 2 kiểu dữ liệu:
-
-- Bài mới lấy từ RSS: có title, url, source, category, published date.
-- Bài đã extract: có thêm `content_text`, `article_id`, `word_count`.
-
-**File tự tạo:** `practice_project_schema.py`.
-
-**Yêu cầu cụ thể:**
-
-1. Tạo dataclass `ArticleCandidate` (frozen, slots):
-   - `source: str`
-   - `source_name: str`
-   - `title: str`
-   - `url: str`
-   - `category: str | None = None`
-   - `published_at: str | None = None`
-2. Tạo dataclass `CrawledArticle` (frozen, slots):
-   - `article_id: int`
-   - `source: str`
-   - `source_name: str`
-   - `url: str`
-   - `title: str`
-   - `content_text: str`
-   - `category: str | None = None`
-   - `published_at: str | None = None`
-   - `word_count: int = 0`
-   - `url_hash: str = ""`
-   - Method `to_jsonl_record()` trả dict gồm: `article_id`, `source`, `url`, `title`, `category`, `published_at`, `content_text`.
-3. Tạo Pydantic `SummaryItem` có: `title`, `source`, `url`, `published_at: str | None`, `summary`.
-4. Tạo dataclass `NewsSource` (frozen, slots): `id`, `name`, `domain`, `rss: list[str]`, `enabled: bool = True`, `max_items_per_feed: int | None = None`.
-5. Tạo 3 nguồn fake, trong đó 1 nguồn disabled.
-6. Viết `enabled_sources(only=None)`.
-7. Viết `canonical_category(raw)` dùng dict alias.
-
-**Tự kiểm tra:**
+**Yêu cầu:** Viết `canonical_category(raw)` và test:
 
 ```python
-sources = enabled_sources()
-assert len(sources) == 2
-candidate = ArticleCandidate(source="demo", source_name="Demo", title="Tin A", url="https://example.com/a")
-assert candidate.title == "Tin A"
-article = CrawledArticle(article_id=1, source="demo", source_name="Demo", url="https://example.com/a", title="Tin A", content_text="Nội dung bài viết dài.")
-record = article.to_jsonl_record()
-assert "content_text" in record
-assert "word_count" not in record  # to_jsonl_record không chứa word_count
+assert canonical_category("thời sự") == "thoi_su"
+assert canonical_category("kinh-doanh") == "kinh_doanh"
+assert canonical_category("xa-hoi") == "thoi_su"
+assert canonical_category(None) is None
+assert canonical_category("unknown") is None
 ```
 
-**So sánh dự án:** mở `app/schemas.py` và `app/sources.py` để so code.
+### Bài tập 2.3 — CrawlStats và enabled_sources
 
-Checklist qua chặng:
+**Yêu cầu:** Tạo `CrawlStats` dataclass (dùng `field(default_factory=list)` cho `errors`) và `enabled_sources(only)` function.
 
-- Bạn hiểu khác nhau giữa dataclass và Pydantic model.
-- Bạn biết khi nào dùng `frozen=True`.
-- Bạn biết một article đi từ RSS sang extracted article như thế nào.
-- Bạn tự code được cấu hình source không phụ thuộc database.
-
----
-
-## Chặng 2 - HTTP, RSS, Async Và CLI Crawler Tối Giản
-
-**Mục tiêu:** đọc được RSS feed, lấy ra danh sách bài báo gồm title và URL, hiểu async cơ bản.
-
-### Bạn cần hiểu gì?
-
-- HTTP request là gửi yêu cầu tới URL và nhận response (status code, body).
-- RSS là XML, thường có nhiều item, mỗi item có `title`, `link`, `published`.
-- `httpx.AsyncClient` giúp gọi HTTP async (không chặn chương trình).
-- **async/await cơ bản:**
-  - `async def f():` tạo coroutine.
-  - `await some_coroutine()` chờ kết quả.
-  - `asyncio.run(main())` chạy event loop.
-  - Nhiều coroutine có thể chạy song song bằng `asyncio.gather()`.
-- `feedparser.parse()` biến XML RSS thành object Python dễ đọc.
-- CLI giúp chạy crawler bằng command thay vì sửa code.
-- **Ngày tháng (datetime):**
-  - RSS feed thường chứa ngày dạng RFC 2822: `"Thu, 22 May 2025 10:30:00 +0700"`.
-  - `email.utils.parsedate_to_datetime()` parse được format này.
-  - Cần chuẩn hóa về UTC để dễ so sánh.
-
-### File/function trong dự án
-
-- `app/crawler.py`
-  - `PoliteClient`: client HTTP có timeout/rate limit/retry.
-  - `fetch_feed()`: lấy RSS và parse ra `ArticleCandidate`.
-  - `_to_utc()`: chuẩn hóa ngày tháng từ RSS sang UTC string.
-  - `_category_from_url()`: đoán category từ RSS URL hoặc article URL.
-
-### Bài tập nhỏ 2.1 - Request một URL
-
-**Yêu cầu:** tạo `practice_http.py`, dùng `httpx` request một URL và in status code.
-
-**Đáp án gợi ý:**
-
-```python
-import httpx
-
-response = httpx.get("https://example.com", timeout=10)
-print(response.status_code)
-print(response.text[:80])
-```
-
-**Kết quả đúng:** status code thường là `200`, text bắt đầu bằng HTML.
-
-### Bài tập nhỏ 2.2 - Async request
-
-**Yêu cầu:** viết async function `fetch_text(url)` trả về text HTML.
-
-**Đáp án gợi ý:**
-
-```python
-import asyncio
-import httpx
-
-async def fetch_text(url):
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        return response.text
-
-async def main():
-    text = await fetch_text("https://example.com")
-    print(len(text))
-
-asyncio.run(main())
-```
-
-### Bài tập nhỏ 2.3 - Parse RSS
-
-**Yêu cầu:** tạo `practice_rss_parse.py`, dùng `feedparser` parse XML RSS thật và in 5 title đầu.
-
-**Đáp án gợi ý:**
-
-```python
-import httpx
-import feedparser
-
-response = httpx.get("https://vnexpress.net/rss/thoi-su.rss", timeout=15)
-feed = feedparser.parse(response.text)
-print(f"Feed title: {feed.feed.get('title', 'N/A')}")
-print(f"Total entries: {len(feed.entries)}")
-for entry in feed.entries[:5]:
-    print(f"  - {entry.get('title')} | {entry.get('link')}")
-```
-
-**Kết quả đúng:** mỗi dòng có title và link bài viết từ VnExpress.
-
-### Bài tập nhỏ 2.4 - Parse ngày từ RSS
-
-**Yêu cầu:** viết `parse_rss_date(date_string)` parse ngày từ RSS entry. Nếu lỗi trả `None`.
-
-**Đáp án gợi ý:**
-
-```python
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
-
-def parse_rss_date(date_string):
-    if not date_string:
-        return None
-    try:
-        dt = parsedate_to_datetime(date_string)
-        return dt.astimezone(timezone.utc).isoformat()
-    except Exception:
-        return None
-
-# Test
-print(parse_rss_date("Thu, 22 May 2025 10:30:00 +0700"))
-# 2025-05-22T03:30:00+00:00
-print(parse_rss_date("invalid"))
-# None
-```
-
-**Liên hệ dự án:** mở `app/crawler.py`, tìm hàm `_to_utc()`. Logic tương tự nhưng dự án xử lý thêm một số edge case.
-
-### Bài tập nhỏ 2.5 - asyncio.gather chạy song song
-
-**Yêu cầu:** dùng `asyncio.gather()` fetch 3 URL cùng lúc và in thời gian.
-
-**Đáp án gợi ý:**
-
-```python
-import asyncio
-import time
-import httpx
-
-async def fetch_status(url):
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(url)
-        return url, r.status_code
-
-async def main():
-    urls = [
-        "https://example.com",
-        "https://httpbin.org/get",
-        "https://httpbin.org/status/200",
-    ]
-    start = time.monotonic()
-    results = await asyncio.gather(*[fetch_status(u) for u in urls])
-    elapsed = time.monotonic() - start
-    for url, status in results:
-        print(f"{status} {url}")
-    print(f"Total time: {elapsed:.2f}s (parallel, not 3x sequential)")
-
-asyncio.run(main())
-```
-
-**Kết quả đúng:** tổng thời gian gần bằng 1 request đơn (vì chạy song song).
-
-### Bài tập nhỏ 2.6 - CLI nhận URL RSS
-
-**Yêu cầu:** chạy được:
-
-```bash
-python practice_rss.py --url https://vnexpress.net/rss/thoi-su.rss --limit 5
-```
-
-Output: 5 dòng, mỗi dòng là title.
-
-**Gợi ý xử lý lỗi:** nếu request lỗi, return list rỗng và in message ngắn như `fetch failed: ...`.
-
-### Bài cuối chặng 2 - Code lại RSS discovery tối giản
-
-**Bối cảnh:** trước khi crawl nội dung, dự án phải đọc RSS để biết có những URL bài báo nào.
-
-**File tự tạo:** `practice_rss_crawler.py`.
-
-**Yêu cầu cụ thể:**
-
-1. Tạo dataclass `ArticleCandidate` gồm `source`, `source_name`, `title`, `url`, `category`, `published_at`.
-2. Viết async function `fetch_feed(source_id, source_name, rss_url, limit)`:
-   - Request RSS bằng `httpx.AsyncClient`.
-   - Parse bằng `feedparser`.
-   - Trả list `ArticleCandidate`.
-   - Nếu feed lỗi, không crash, trả list rỗng.
-   - Parse ngày bằng `parsedate_to_datetime`.
-3. Viết CLI:
-   - `--source`, default `demo`.
-   - `--url`, required.
-   - `--limit`, default `5`.
-4. In ra từng bài theo format:
-
-```text
-[demo] Title - https://...
-```
-
-**Command tự kiểm tra:**
-
-```bash
-python practice_rss_crawler.py --source vnexpress --url https://vnexpress.net/rss/thoi-su.rss --limit 5
-```
-
-**Kết quả đúng:** có tối đa 5 dòng article, mỗi dòng có source, title, URL. Nếu đổi URL thành URL sai, chương trình không văng traceback dài.
-
-**So sánh dự án:** mở `app/crawler.py`, tìm function `fetch_feed()`. So sánh cách dự án xử lý entry, parse category, parse date.
-
-Checklist qua chặng:
-
-- Bạn giải thích được RSS dùng để làm gì.
-- Bạn biết `async/await` ở mức đủ dùng.
-- Bạn biết `asyncio.gather()` chạy nhiều coroutine song song.
-- Bạn parse được ngày tháng từ RSS.
-- Bạn tự code được function lấy article candidate từ RSS.
-- Bạn chạy được CLI có `--url` và `--limit`.
-
----
-
-## Chặng 3 - URL Cleanup, Robots Và Rate Limit
-
-**Mục tiêu:** biến crawler từ "request được" thành crawler có trách nhiệm: không crawl trùng, không spam server, biết tôn trọng robots.txt.
-
-### Bạn cần hiểu gì?
-
-- Một URL có các phần: scheme (`https`), domain (`vnexpress.net`), path (`/thoi-su/tin-abc`), query (`?id=1&utm_source=fb`), fragment (`#comment`).
-- Query tracking như `utm_source`, `utm_medium`, `fbclid` không làm thay đổi nội dung bài báo → cần bỏ để dedupe.
-- **Canonical URL** là URL đã được làm sạch: bỏ tracking, bỏ fragment, sort query, lowercase domain.
-- **robots.txt** là file trên mỗi website (ví dụ `https://vnexpress.net/robots.txt`) nói crawler được/không được crawl path nào.
-  - `Disallow: /admin/` nghĩa là không được crawl path `/admin/`.
-  - `Allow: /` nghĩa là được crawl mọi path.
-  - Python có `urllib.robotparser.RobotFileParser` để check.
-- **Rate limit** giúp cùng một host không bị request quá nhanh (ví dụ chờ ít nhất 1 giây giữa 2 request cùng domain).
-- **Retry** dùng khi gặp lỗi tạm thời:
-  - HTTP 429 (Too Many Requests)
-  - HTTP 500/502/503 (Server Error)
-  - Timeout
-  - Dùng exponential backoff: chờ 1s, 2s, 4s, 8s... giữa các lần retry.
-- `tenacity` là thư viện retry phổ biến trong dự án.
-
-### File/function trong dự án
-
-- `app/crawler.py`
-  - `_TRACKING_PREFIXES`: tuple các prefix tracking cần bỏ (utm_, ga_, fbclid, gclid, ...).
-  - `canonicalize_url(url)`: bỏ tracking params, fragment, sort query, lowercase.
-  - `url_hash(url)`: SHA-256 của canonical URL, lấy 32 ký tự đầu → tạo ID ổn định.
-  - `RobotsCache`: cache robots.txt theo host, check `can_fetch(url)`.
-  - `PoliteClient.get()`: request HTTP có timeout, retry (tenacity), rate limit per-host.
-
-### Bài tập nhỏ 3.1 - Tách thành phần URL
-
-**Yêu cầu:** dùng `urllib.parse.urlsplit()` để in `scheme`, `netloc`, `path`, `query`, `fragment` của URL:
-
-```text
-https://example.com/news/a?id=1&utm_source=fb#comment
-```
-
-**Đáp án gợi ý:**
-
-```python
-from urllib.parse import urlsplit
-
-parts = urlsplit("https://example.com/news/a?id=1&utm_source=fb#comment")
-print(parts.scheme)    # https
-print(parts.netloc)    # example.com
-print(parts.path)      # /news/a
-print(parts.query)     # id=1&utm_source=fb
-print(parts.fragment)  # comment
-```
-
-### Bài tập nhỏ 3.2 - Canonical URL
-
-**Yêu cầu:** viết `canonicalize_url(url)`:
-
-- Bỏ fragment `#...`.
-- Bỏ query key bắt đầu bằng `utm_`.
-- Bỏ `fbclid`, `gclid`, `ref`, `src`, `from`.
-- Sort query params theo key.
-- Bỏ dấu `/` cuối path, trừ khi path chỉ là `/`.
-- Lowercase scheme và domain.
-
-**Đáp án gợi ý:**
-
-```python
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-
-TRACKING_PREFIXES = ("utm_", "ga_", "yclid", "fbclid", "gclid", "ref", "src", "from")
-
-def canonicalize_url(url):
-    parts = urlsplit(url.strip())
-    query_items = []
-    for key, value in parse_qsl(parts.query, keep_blank_values=True):
-        lower_key = key.lower()
-        if any(lower_key.startswith(prefix) or lower_key == prefix for prefix in TRACKING_PREFIXES):
-            continue
-        query_items.append((key, value))
-    query = urlencode(sorted(query_items))
-    path = parts.path
-    if path != "/":
-        path = path.rstrip("/")
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
-```
-
-**Kết quả đúng:**
-
-```python
-assert canonicalize_url("https://A.com/news/?utm_source=x&id=1#top") == "https://a.com/news?id=1"
-```
-
-### Bài tập nhỏ 3.3 - Hash URL
-
-**Yêu cầu:** viết `url_hash(url)` dùng SHA-256 của canonical URL, lấy 32 ký tự đầu.
-
-**Đáp án gợi ý:**
-
-```python
-import hashlib
-
-def url_hash(url):
-    clean = canonicalize_url(url)
-    return hashlib.sha256(clean.encode("utf-8")).hexdigest()[:32]
-```
-
-**Kết quả đúng:**
-
-```python
-u1 = "https://a.com/news?id=1&utm_source=fb"
-u2 = "https://a.com/news?id=1"
-assert url_hash(u1) == url_hash(u2)
-```
-
-### Bài tập nhỏ 3.4 - Kiểm tra robots.txt
-
-**Yêu cầu:** viết function `check_robots(robots_url, target_url, user_agent)` kiểm tra xem URL có được crawl không.
-
-**Đáp án gợi ý:**
-
-```python
-from urllib.robotparser import RobotFileParser
-import httpx
-
-def check_robots(robots_url, target_url, user_agent="my-bot/1.0"):
-    parser = RobotFileParser(robots_url)
-    try:
-        response = httpx.get(robots_url, timeout=10)
-        parser.parse(response.text.splitlines())
-    except Exception:
-        return True  # Nếu không đọc được robots.txt, mặc định cho phép
-    return parser.can_fetch(user_agent, target_url)
-
-# Test
-allowed = check_robots(
-    "https://vnexpress.net/robots.txt",
-    "https://vnexpress.net/thoi-su/tin-abc-123.html",
-)
-print(f"Allowed: {allowed}")
-```
-
-**Liên hệ dự án:** mở `app/crawler.py`, tìm class `RobotsCache`. Dự án cache robots.txt theo host để không phải request lại mỗi lần. Logic tương tự nhưng dùng async và có dict cache.
-
-### Bài tập nhỏ 3.5 - Rate limiter đơn giản
-
-**Yêu cầu:** viết class `SimpleRateLimiter`:
-
-- Có dict lưu lần request cuối của từng host.
-- Nếu host vừa được request dưới 1 giây trước, sleep phần còn thiếu.
-- Dùng async `await asyncio.sleep(...)`.
-
-**Đáp án gợi ý:**
-
-```python
-import asyncio
-import time
-
-class SimpleRateLimiter:
-    def __init__(self, min_interval=1.0):
-        self.min_interval = min_interval
-        self.last_seen = {}
-
-    async def wait(self, host):
-        now = time.monotonic()
-        last = self.last_seen.get(host)
-        if last is not None:
-            delay = self.min_interval - (now - last)
-            if delay > 0:
-                await asyncio.sleep(delay)
-        self.last_seen[host] = time.monotonic()
-```
-
-### Bài tập nhỏ 3.6 - Retry với tenacity
-
-**Yêu cầu:** viết function `fetch_with_retry(url)` dùng tenacity retry 3 lần với exponential backoff khi gặp `httpx.HTTPError`.
-
-**Đáp án gợi ý:**
-
-```python
-import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
-@retry(
-    retry=retry_if_exception_type(httpx.HTTPError),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    reraise=True,
-)
-def fetch_with_retry(url):
-    response = httpx.get(url, timeout=10)
-    if response.status_code == 429 or response.status_code >= 500:
-        raise httpx.HTTPStatusError(
-            f"retryable {response.status_code}",
-            request=response.request,
-            response=response,
-        )
-    return response.text
-
-# Test
-try:
-    text = fetch_with_retry("https://example.com")
-    print(f"OK, length={len(text)}")
-except Exception as e:
-    print(f"Failed after retries: {e}")
-```
-
-**Liên hệ dự án:** mở `app/crawler.py`, tìm class `PoliteClient`. Method `get()` dùng `AsyncRetrying` (async version) của tenacity với pattern tương tự.
-
-### Bài cuối chặng 3 - Code lại URL tools và polite client mini
-
-**Bối cảnh:** crawler thật cần URL sạch để dedupe và client lịch sự để tránh request quá nhanh.
-
-**File tự tạo:** `practice_url_tools.py`.
-
-**Yêu cầu cụ thể:**
-
-1. Viết `canonicalize_url(url)` theo yêu cầu bài 3.2.
-2. Viết `url_hash(url)` theo yêu cầu bài 3.3.
-3. Viết `host_from_url(url)` trả domain lowercase.
-4. Viết `SimpleRateLimiter` async.
-5. Viết `PoliteClientMini`:
-   - Dùng `httpx.AsyncClient`.
-   - Trước khi request thì gọi rate limiter theo host.
-   - Có timeout 10 giây.
-   - Nếu status code là `429` hoặc `5xx`, retry tối đa 2 lần.
-   - Nếu vẫn lỗi, return `None` thay vì crash.
-6. Viết CLI test nhanh 2 URL.
-
-**Command tự kiểm tra:**
-
-```bash
-python practice_url_tools.py --url https://example.com/?utm_source=x#top
-```
-
-**Kết quả đúng:**
-
-- In URL đã canonical.
-- In hash 32 ký tự.
-- Request hợp lệ trả text length.
-- URL lỗi không làm chương trình crash.
-
-**So sánh dự án:** mở `app/crawler.py` và so sánh:
-- `canonicalize_url()` (dòng khoảng 200+)
-- `url_hash()` (ngay sau canonicalize)
-- `PoliteClient` class (dòng khoảng 89+)
-
-Checklist qua chặng:
-
-- Bạn biết URL canonical dùng để dedupe.
-- Bạn biết vì sao cần rate limit và robots.txt.
-- Bạn tự code được hash ổn định cho article ID.
-- Bạn hiểu retry exponential backoff và tenacity.
-- Bạn hiểu ý tưởng chính của `PoliteClient` trong dự án.
-
----
-
-## Chặng 4 - Extract Nội Dung Bài Báo Từ HTML
-
-**Mục tiêu:** từ HTML nhiều menu/quảng cáo/footer lấy ra phần nội dung bài báo sạch trong `content_text`.
-
-### Bạn cần hiểu gì?
-
-- HTML của một trang báo không chỉ có nội dung bài viết, còn có menu, script, quảng cáo, bài liên quan.
-- Model summarization cần text sạch, không cần HTML tag.
-- **trafilatura** là thư viện chuyên lấy nội dung chính từ trang web. Cách dùng đơn giản: `trafilatura.extract(html)`.
-- **readability-lxml** là fallback nếu trafilatura không extract được. Dùng: `Document(html).summary()` rồi parse bằng BeautifulSoup.
-- **BeautifulSoup** dùng để parse HTML và lấy text.
-- **Normalize text:**
-  - Unicode NFC normalization: `unicodedata.normalize("NFC", text)` đảm bảo ký tự tiếng Việt thống nhất (ví dụ "ả" có thể được biểu diễn bằng 1 hoặc 2 ký tự Unicode).
-  - Gộp whitespace: `re.sub(r"\s+", " ", text)`.
-  - Strip đầu/cuối.
-- **Bỏ boilerplate:** dòng bắt đầu bằng "đọc thêm", "xem thêm", "tags:", "từ khóa:" không phải nội dung bài.
-- Crawler nên bỏ bài quá ngắn (ví dụ dưới 50 từ) vì không đủ thông tin để summarize/label.
-
-### File/function trong dự án
-
-- `app/crawler.py`
-  - `ExtractedArticle`: dataclass chứa kết quả extract (title, author, published_at, language, content_text, word_count).
-  - `normalize_text(text)`: NFC normalize, gộp whitespace, strip.
-  - `word_count(text)`: đếm số từ.
-  - `extract_from_html(html, url)`: lấy title/content/date bằng trafilatura trước, fallback readability + BeautifulSoup.
-  - `_BOILERPLATE_RE`: regex bỏ dòng boilerplate.
-
-### Bài tập nhỏ 4.1 - Lấy text từ HTML đơn giản bằng BeautifulSoup
-
-**Yêu cầu:** với HTML sau, lấy text trong `<article>`:
-
-```html
-<html>
-  <body>
-    <nav>Menu không lấy</nav>
-    <article>
-      <h1>Tiêu đề bài viết</h1>
-      <p>Đoạn một của bài viết.</p>
-      <p>Đoạn hai của bài viết.</p>
-    </article>
-    <footer>Footer không lấy</footer>
-  </body>
-</html>
-```
-
-**Đáp án gợi ý:**
-
-```python
-from bs4 import BeautifulSoup
-
-soup = BeautifulSoup(html, "html.parser")
-article = soup.find("article")
-text = article.get_text(" ", strip=True)
-print(text)
-```
-
-**Kết quả đúng:** output có tiêu đề và 2 đoạn, không có menu/footer.
-
-### Bài tập nhỏ 4.2 - Dùng trafilatura extract nội dung
-
-**Yêu cầu:** tạo `practice_trafilatura.py`, fetch HTML thật từ một URL tin tức, dùng trafilatura extract nội dung.
-
-**Đáp án gợi ý:**
-
-```python
-import httpx
-import trafilatura
-
-url = "https://vnexpress.net/thoi-su"  # Hoặc URL bài viết cụ thể
-response = httpx.get(url, timeout=15, follow_redirects=True)
-text = trafilatura.extract(response.text)
-if text:
-    print(f"Extracted {len(text.split())} words")
-    print(text[:200])
-else:
-    print("trafilatura returned None")
-```
-
-**Kết quả đúng:** thấy nội dung text sạch, không có HTML tag, menu, quảng cáo.
-
-### Bài tập nhỏ 4.3 - Fallback: readability + BeautifulSoup
-
-**Yêu cầu:** nếu trafilatura trả `None`, dùng readability-lxml làm fallback.
-
-**Đáp án gợi ý:**
-
-```python
-from readability import Document
-from bs4 import BeautifulSoup
-import trafilatura
-
-def extract_text(html):
-    # Try trafilatura first
-    text = trafilatura.extract(html)
-    if text and len(text.split()) > 20:
-        return text
-    # Fallback to readability
-    doc = Document(html)
-    summary_html = doc.summary()
-    soup = BeautifulSoup(summary_html, "html.parser")
-    paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
-    fallback = " ".join(p for p in paragraphs if p)
-    return fallback if fallback else None
-```
-
-**Liên hệ dự án:** mở `app/crawler.py`, tìm `extract_from_html()`. Dự án dùng pattern tương tự: trafilatura trước, readability + BeautifulSoup fallback.
-
-### Bài tập nhỏ 4.4 - Normalize text (Unicode NFC + whitespace)
-
-**Yêu cầu:** viết `normalize_text(text)`:
-
-- Nếu `None` hoặc chuỗi rỗng thì trả `""`.
-- `unicodedata.normalize("NFC", text)` để chuẩn hóa Unicode tiếng Việt.
-- Đổi nhiều whitespace liên tiếp thành một space.
-- Strip đầu/cuối.
-
-**Đáp án gợi ý:**
-
-```python
-import re
-import unicodedata
-
-def normalize_text(text):
-    if not text:
-        return ""
-    text = unicodedata.normalize("NFC", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-```
-
-**Kết quả đúng:**
-
-```python
-assert normalize_text(" A\n\n B   C ") == "A B C"
-assert normalize_text(None) == ""
-```
-
-**Tại sao cần NFC?** Tiếng Việt có dấu thanh (ả, ã, ắ...) có thể biểu diễn bằng 1 ký tự (precomposed) hoặc 2 ký tự (base + combining mark). NFC đảm bảo luôn dùng precomposed, giúp so sánh text chính xác.
-
-### Bài tập nhỏ 4.5 - Bỏ dòng boilerplate
-
-**Yêu cầu:** viết `remove_boilerplate(text)` bỏ dòng bắt đầu bằng "đọc thêm", "xem thêm", "tags:", "từ khóa:", "liên quan:".
-
-**Đáp án gợi ý:**
-
-```python
-import re
-
-_BOILERPLATE_RE = re.compile(
-    r"(?im)^\s*(?:đọc thêm|xem thêm|tags?:|từ khóa:|liên quan:).*$"
-)
-
-def remove_boilerplate(text):
-    return _BOILERPLATE_RE.sub("", text).strip()
-```
-
-**Kết quả đúng:**
-
-```python
-text = "Nội dung bài.\nĐọc thêm: bài liên quan\nCuối bài."
-assert "Đọc thêm" not in remove_boilerplate(text)
-```
-
-**Liên hệ dự án:** mở `app/crawler.py`, tìm `_BOILERPLATE_RE`. Pattern tương tự.
-
-### Bài tập nhỏ 4.6 - Bỏ bài quá ngắn
-
-**Yêu cầu:** viết `word_count(text)` và nếu text dưới 50 từ thì return `None`.
-
-**Đáp án gợi ý:**
-
-```python
-def word_count(text):
-    return len(normalize_text(text).split())
-
-def keep_if_long_enough(text, min_words=50):
-    text = normalize_text(text)
-    if word_count(text) < min_words:
-        return None
-    return text
-```
-
-### Bài cuối chặng 4 - Code lại extractor mini
-
-**Bối cảnh:** sau khi có URL bài báo, crawler fetch HTML và cần tạo `content_text` sạch.
-
-**File tự tạo:** `practice_extract.py`.
-
-**Yêu cầu cụ thể:**
-
-1. Tạo dataclass `ExtractedArticle`:
-   - `title: str | None`
-   - `content_text: str`
-   - `word_count: int`
-   - `published_at: str | None = None`
-2. Viết `normalize_text(text)` với NFC normalization.
-3. Viết `remove_boilerplate(text)`.
-4. Viết `word_count(text)`.
-5. Viết `extract_from_html(html, min_words=50)`:
-   - Nếu input rỗng, return `None`.
-   - Ưu tiên dùng `trafilatura.extract(html)`.
-   - Nếu trafilatura trả `None` hoặc quá ngắn, fallback dùng readability + BeautifulSoup.
-   - Normalize text.
-   - Bỏ boilerplate.
-   - Nếu dưới `min_words`, return `None`.
-   - Lấy title từ HTML nếu có.
-   - Nếu đạt, return `ExtractedArticle`.
-6. CLI test: nhận URL, fetch HTML, extract và in kết quả.
-
-**Command tự kiểm tra:**
-
-```bash
-python practice_extract.py --url https://vnexpress.net/thoi-su/tin-abc-123.html
-```
-
-**Kết quả đúng:**
-
-- Có title, word_count, đoạn đầu content_text.
-- Không có HTML tag, menu, footer, boilerplate.
-- Bài quá ngắn trả `None`.
-
-**So sánh dự án:** mở `app/crawler.py`, tìm `extract_from_html()` và so sánh.
-
-Checklist qua chặng:
-
-- Bạn phân biệt được HTML và article text.
-- Bạn biết dùng trafilatura và fallback readability.
-- Bạn hiểu Unicode NFC normalization.
-- Bạn tự code được extractor đầy đủ.
-
----
-
-## Chặng 5 - SimHash, Dedupe Và Crawl Pipeline Hoàn Chỉnh
-
-**Mục tiêu:** ghép các phần đã học thành crawler tạo được JSONL bài báo: discover RSS → lọc URL → fetch HTML → extract text → dedupe → save.
-
-### Bạn cần hiểu gì?
-
-- **Pipeline** là chuỗi nhiều bước, mỗi bước nhận input và tạo output cho bước sau.
-- **Dedupe URL** dùng set/hash để bỏ bài trùng link (2 URL khác tracking params = cùng bài).
-- **Dedupe content** (near-duplicate) dùng **SimHash** để bỏ bài nội dung gần giống nhau:
-  - Ví dụ: VnExpress và Tuoi Tre cùng đăng tin từ TTXVN → nội dung gần giống.
-  - **SimHash** là fingerprint 64-bit của text: chia text thành n-gram, hash mỗi n-gram, kết hợp.
-  - **Hamming distance** đo số bit khác nhau giữa 2 SimHash. Nếu distance nhỏ (ví dụ ≤ 3) → bài gần trùng.
-- **asyncio.Semaphore** giới hạn số coroutine chạy đồng thời (ví dụ tối đa 5 bài đang fetch cùng lúc).
-- **asyncio.Lock** đảm bảo chỉ 1 coroutine truy cập tài nguyên tại một thời điểm.
-- Crawl stats giúp biết crawler đang làm gì: discovered, fetched, extracted, skipped.
-- `--limit` nên là limit tổng số bài output, không phải limit số RSS item đọc.
-
-### File/function trong dự án
-
-- `app/crawler.py`
-  - `simhash64(text)`: tạo fingerprint 64-bit từ text.
-  - `hamming(a, b)`: đếm số bit khác nhau giữa 2 hash → `bin(a ^ b).count("1")`.
-  - `_SIMHASH_TOKEN_RE`, `_SIMHASH_NGRAM_WIDTH`, `_SIMHASH_WEIGHT_CAP`: cấu hình SimHash.
-  - `crawl_articles(...)`: pipeline crawl chính.
-  - `write_jsonl(...)`: ghi output.
-  - `_run_cli(...)`: command `python -m app.crawler ...`.
-- `app/sources.py`
-  - `CrawlStats`: dataclass đếm số bài ở mỗi bước pipeline.
-
-### Bài tập nhỏ 5.1 - Dedupe URL bằng set
-
-**Yêu cầu:** với list URL có trùng tracking params, chỉ giữ URL unique theo canonical URL.
-
-**Đáp án gợi ý:**
-
-```python
-seen = set()
-unique = []
-for url in urls:
-    clean = canonicalize_url(url)
-    if clean in seen:
-        continue
-    seen.add(clean)
-    unique.append(clean)
-```
-
-**Kết quả đúng:** hai URL chỉ khác `utm_source` chỉ còn một.
-
-### Bài tập nhỏ 5.2 - Hiểu SimHash
-
-**Lý thuyết nhanh:**
-
-SimHash hoạt động theo các bước:
-1. Chia text thành token (từ).
-2. Tạo n-gram từ token (ví dụ 4-gram: `["abc def ghi jkl", "def ghi jkl mno", ...]`).
-3. Hash mỗi n-gram thành số 64-bit.
-4. Với mỗi bit position (0-63): nếu bit = 1 thì +weight, nếu bit = 0 thì -weight.
-5. Bit cuối cùng: nếu tổng > 0 thì 1, ngược lại 0.
-
-**Yêu cầu:** viết `simhash_simple(text)` trả fingerprint 64-bit.
-
-**Đáp án gợi ý:**
-
-```python
-import hashlib
-import re
-
-def simhash_simple(text):
-    tokens = re.findall(r"\w+", text.lower())
-    if not tokens:
-        return 0
-    # Tạo 4-gram
-    ngrams = []
-    for i in range(len(tokens) - 3):
-        ngrams.append(" ".join(tokens[i:i+4]))
-    if not ngrams:
-        ngrams = tokens  # Fallback nếu text quá ngắn
-
-    v = [0] * 64
-    for ngram in ngrams:
-        h = int(hashlib.md5(ngram.encode()).hexdigest(), 16) & ((1 << 64) - 1)
-        for i in range(64):
-            if h & (1 << i):
-                v[i] += 1
-            else:
-                v[i] -= 1
-
-    fingerprint = 0
-    for i in range(64):
-        if v[i] > 0:
-            fingerprint |= (1 << i)
-    return fingerprint
-
-def hamming_distance(a, b):
-    return bin(a ^ b).count("1")
-
-# Test
-h1 = simhash_simple("Hà Nội mưa lớn trong nhiều giờ đồng hồ gây ngập úng")
-h2 = simhash_simple("Hà Nội mưa lớn trong nhiều giờ liền gây ngập úng")
-h3 = simhash_simple("Đội tuyển Việt Nam thắng trận giao hữu tối qua")
-print(f"h1 vs h2 (similar): {hamming_distance(h1, h2)}")
-print(f"h1 vs h3 (different): {hamming_distance(h1, h3)}")
-```
-
-**Kết quả đúng:** `h1 vs h2` có hamming distance nhỏ (≤ 5), `h1 vs h3` có hamming distance lớn (> 10).
-
-**Liên hệ dự án:** mở `app/crawler.py`, tìm `simhash64()`. Dự án dùng thư viện `simhash` thay vì tự viết, nhưng logic tương tự. Dự án coi hamming distance ≤ 3 là near-duplicate.
-
-### Bài tập nhỏ 5.3 - asyncio.Semaphore
-
-**Yêu cầu:** dùng `asyncio.Semaphore(2)` để chỉ cho tối đa 2 coroutine chạy cùng lúc.
-
-**Đáp án gợi ý:**
-
-```python
-import asyncio
-import time
-
-async def task(name, semaphore):
-    async with semaphore:
-        print(f"[{time.monotonic():.1f}] {name} start")
-        await asyncio.sleep(1)
-        print(f"[{time.monotonic():.1f}] {name} done")
-
-async def main():
-    sem = asyncio.Semaphore(2)
-    await asyncio.gather(
-        task("A", sem),
-        task("B", sem),
-        task("C", sem),
-        task("D", sem),
-    )
-
-asyncio.run(main())
-```
-
-**Kết quả đúng:** A và B bắt đầu cùng lúc, C và D đợi đến khi A hoặc B xong mới bắt đầu.
-
-**Liên hệ dự án:** mở `labeling/label_dataset.py` dòng 93, `asyncio.Semaphore(max(concurrency, 1))` giới hạn số bài label cùng lúc để không vượt quota API.
-
-### Bài tập nhỏ 5.4 - Stats object
-
-**Yêu cầu:** tạo dataclass `CrawlStats` có `discovered`, `fetched`, `extracted`, `fetch_failed`, `extract_failed`, rồi tăng số trong pipeline giả.
-
-**Đáp án gợi ý:**
+**Đáp án:**
 
 ```python
 from dataclasses import dataclass, field
 
-@dataclass
+@dataclass(slots=True)
 class CrawlStats:
     discovered: int = 0
     fetched: int = 0
     extracted: int = 0
+    skipped_duplicate: int = 0
+    skipped_robots: int = 0
     fetch_failed: int = 0
     extract_failed: int = 0
     errors: list[str] = field(default_factory=list)
+
+def enabled_sources(only: set[str] | None = None) -> list[NewsSource]:
+    return [s for s in SOURCES if s.enabled and (only is None or s.id in only)]
 ```
 
-### Bài tập nhỏ 5.5 - Pipeline giả không dùng internet
+### 🎯 Bài cuối chặng 2 — Code lại `app/sources.py`
 
-**Yêu cầu:** tạo list 5 candidate fake, trong đó:
+**Yêu cầu:** Tạo file `app/sources.py` (189 dòng) chứa đầy đủ:
+- `USER_AGENT`, `CRAWL_DELAY_SECONDS`, `TIMEOUT_SECONDS`, `MAX_RETRIES`
+- `NewsSource` dataclass (frozen, slots)
+- `SOURCES` list — 8 nguồn báo (vnexpress, tuoitre, thanhnien, vietnamnet, dantri, znews, vtcnews, laodong)
+  - `laodong` có `enabled=False`
+  - `vietnamnet` có `max_items_per_feed=100`
+- `CANONICAL_CATEGORIES` dict — 8 categories
+- `CrawlStats` dataclass (slots, mutable)
+- `enabled_sources(only)` function
+- `canonical_category(raw)` function
 
-- 1 URL trùng.
-- 1 HTML quá ngắn.
-- 1 HTML lỗi `None`.
-
-Pipeline cần output đúng 2 bài hợp lệ.
-
-**Đáp án/kết quả đúng:**
-
-```python
-assert stats.discovered == 5
-assert stats.extracted == 2
-assert len(articles) == 2
-```
-
-### Bài tập nhỏ 5.6 - Ghi crawler output JSONL
-
-**Yêu cầu:** mỗi output row có schema tối thiểu:
-
-```json
-{"article_id":"...","source":"demo","url":"...","title":"...","content_text":"..."}
-```
-
-**Kết quả đúng:** file JSONL có số dòng bằng số article extracted.
-
-### Bài cuối chặng 5 - Code lại crawler mini hoàn chỉnh
-
-**Bối cảnh:** đây là bản thu nhỏ của `app/crawler.py`.
-
-**File tự tạo:** `mini_crawler.py`.
-
-**Yêu cầu cụ thể:**
-
-1. CLI hỗ trợ:
-   - `--rss`: RSS URL bắt buộc.
-   - `--source`: default `demo`.
-   - `--limit`: default `5`.
-   - `--output`: default `data/practice/articles.jsonl`.
-   - `--verbose`: nếu bật thì in log từng bước.
-2. Reuse hoặc tự viết lại:
-   - `canonicalize_url()`.
-   - `url_hash()`.
-   - `fetch_feed()`.
-   - `extract_from_html()` (dùng trafilatura + fallback).
-   - `normalize_text()`.
-   - `write_jsonl()`.
-3. Pipeline:
-   - Đọc RSS.
-   - Duyệt từng candidate.
-   - Bỏ URL trùng (dùng set + canonical URL).
-   - Fetch HTML.
-   - Extract text.
-   - Bỏ bài dưới 50 từ.
-   - (Bonus) Dedupe content bằng SimHash.
-   - Ghi JSONL khi đủ `limit` bài.
-4. Mỗi record output cần có:
-   - `article_id` (dùng `url_hash()`)
-   - `source`
-   - `url`
-   - `title`
-   - `category`
-   - `published_at`
-   - `content_text`
-   - `word_count`
-5. Nếu một URL lỗi, bỏ qua và tiếp tục.
-6. Cuối chương trình in stats.
-
-**Command tự kiểm tra:**
-
-```bash
-python mini_crawler.py --rss https://vnexpress.net/rss/thoi-su.rss --source vnexpress --limit 5 --output data/practice/articles.jsonl --verbose
-```
-
-**Kết quả đúng:**
-
-- File `data/practice/articles.jsonl` tồn tại.
-- File có tối đa 5 dòng.
-- Mỗi dòng có đủ key bắt buộc.
-- Terminal in stats kiểu:
-
-```text
-discovered=...
-fetched=...
-extracted=5
-```
-
-**So sánh dự án:** mở `app/crawler.py`, đọc function `crawl_articles()` (pipeline chính) và `_run_cli()` (CLI wrapper). So sánh luồng xử lý.
-
-Checklist qua chặng:
-
-- Bạn hiểu SimHash dùng để phát hiện bài gần giống nhau.
-- Bạn biết dùng `asyncio.Semaphore` để giới hạn concurrency.
-- Bạn tự ghép được crawler từ các function nhỏ.
-- Bạn hiểu vì sao live crawl không thể ra đúng lại dataset lịch sử.
-- Bạn biết debug khi crawler chạy lâu: bật `--verbose`, giảm `--limit`, crawl từng source.
-- Bạn đã đủ nền để đọc gần như toàn bộ `app/crawler.py`.
+**Kiểm tra:** So với `app/sources.py` trong dự án — phải giống 100%.
 
 ---
 
-## Chặng 6 - Prompt, JSON Parser Và Gemini Labeling (AI Studio)
+## Chặng 3 — Prompt & JSON Parser (`labeling/prompt.py`)
 
-**Mục tiêu:** hiểu cách dùng Gemini làm teacher model để tạo summary label cho dataset train ViT5. Hiểu cách gọi AI Studio API, xoay vòng key, xử lý model fallback.
+**Mục tiêu:** hiểu prompt engineering, Pydantic validation, robust JSON parsing. Code lại `labeling/prompt.py`.
 
-### Bạn cần hiểu gì?
+### Lý thuyết
 
-- Trong dự án này, Gemini không phải model chạy web demo cuối cùng.
-- Gemini đóng vai trò **teacher**: đọc bài báo và tạo summary chất lượng cao.
-- ViT5 đóng vai trò **student**: học lại từ dataset đã được Gemini gán nhãn.
-- Prompt cần rõ schema output để parser đọc được.
-- LLM có thể trả JSON lỗi, thiếu field, `confidence` quá lớn, hoặc refusal.
-- Parser phải robust để pipeline không chết vì một output lỗi.
-- Gọi nhiều bài cùng lúc cần giới hạn concurrency (Semaphore) để không vượt quota.
-- **AI Studio vs Vertex AI:**
-  - **AI Studio**: dùng API key miễn phí từ https://aistudio.google.com/apikey. Có rate limit per-key.
-  - **Vertex AI**: dùng GCP project, trả phí theo token. Không cần API key nhưng cần service account.
-  - Dự án chuyển sang AI Studio mặc định vì miễn phí.
-- **Key rotation:** AI Studio free key có rate limit. Giải pháp:
-  - Tạo nhiều key (comma-separated).
-  - Khi key hiện tại bị 429 (quota), tự động chuyển sang key tiếp theo.
-  - Khi tất cả key hết quota, thử model fallback (ví dụ: gemini-2.5-flash → gemini-2.0-flash).
-- **Model fallback:** nếu model mới chưa available, tự động thử model cũ hơn.
-- **`google.genai` SDK:** thư viện chính thức mới nhất của Google cho AI Studio.
-- **`asyncio.to_thread()`:** chạy function sync (labeler.generate) trong thread riêng để không block event loop.
-
-### File/function trong dự án
-
-- `labeling/prompt.py`
-  - `PROMPT_VERSION = "1.2.0"`: version prompt hiện tại.
-  - `PROMPT_MODEL = "gemini-2.5-flash"`: model mặc định.
-  - `PROMPT_PROVIDER = "aistudio"`: provider mặc định.
-  - `SYSTEM_PROMPT`: vai trò và quy tắc cho Gemini (biên tập viên, 2-3 câu, 40-70 từ, trung lập...).
-  - `USER_TEMPLATE`: template chứa title/content bài báo + yêu cầu output JSON.
-  - `GenerationParams`: dataclass config (temperature=0.2, top_p=0.9, max_output_tokens=4096, response_mime_type="application/json").
-  - `QcConfig`: config cho QC (min_words, max_words, min_sentences...).
-  - `LabelOutput`: Pydantic model cho output label (summary, key_entities, confidence, refusal_reason).
-  - `render_user_prompt(...)`: ghép dữ liệu article vào prompt, cắt content tối đa 6000 ký tự.
-  - `parse_label_json(...)`: parse JSON output robust (xử lý confidence clamp, refusal, strict=False fallback).
-- `labeling/gemini_labeler.py` (MỚI - thay thế Vertex cho labeling)
-  - `GeminiLabeler`: class chính, gọi AI Studio API.
-    - `__init__(api_keys, model_chain, params, override_callable)`.
-    - `generate(system, user)`: gọi API, per-call local iteration qua keys (thread-safe, không shared state), fallback model.
-    - `_get_client(api_key)`: cache client per-key (thread-safe bằng Lock).
-  - `_keys_from_env()`: đọc key từ `GEMINI_API_KEYS` hoặc `GEMINI_API_KEY`.
-- `labeling/vertex_labeler.py` (legacy, trả phí)
-  - `VertexLabeler`: wrapper cũ dùng Vertex AI.
-- `labeling/label_dataset.py`
-  - `_label_one(row, labeler, semaphore)`: label một article (render prompt → generate → parse → QC).
-  - `label_rows(rows, concurrency, limit, labeler, backend)`: label nhiều article bằng asyncio.gather + Semaphore.
-  - CLI: `--input`, `--output`, `--limit`, `--concurrency`, `--backend {aistudio,vertex}`.
-
-### Bài tập nhỏ 6.1 - Render prompt từ template
-
-**Yêu cầu:** viết function `render_prompt(title, category, source, content_text)` trả về prompt có format:
-
-```text
-Tiêu đề: <title>
-Chuyên mục: <category>
-Nguồn: <source>
-
-Nội dung:
-"""
-<content_text>
-"""
-
-Trả về JSON đúng schema:
-{"summary": "...", "key_entities": ["..."], "confidence": 0.0, "refusal_reason": null}
-```
-
-Nếu content dài hơn 6000 ký tự, cắt tại word boundary và thêm `[...]`.
-
-**Đáp án gợi ý:**
+**1. Prompt design cho labeling:**
+- System prompt: quy tắc chung cho AI (văn phong, độ dài, trung thực).
+- User prompt: dữ liệu cụ thể (tiêu đề, nội dung bài báo).
+- Output schema: JSON format cố định.
 
 ```python
-TEMPLATE = """Tiêu đề: {title}
+SYSTEM_PROMPT = """Bạn là biên tập viên báo chí tiếng Việt. Tóm tắt phải:
+- Trung thực 100% với bài gốc...
+- 2-3 câu, 40-70 từ...
+""".strip()
+
+USER_TEMPLATE = """
+Tiêu đề: {title}
+Chuyên mục: {category}
+...
+Trả về JSON đúng schema:
+{{"summary": "...", "key_entities": ["..."], "confidence": 0.0, "refusal_reason": null}}
+""".strip()
+```
+
+**2. `GenerationParams`:** cấu hình gửi kèm mỗi request tới Gemini.
+```python
+@dataclass(slots=True)
+class GenerationParams:
+    temperature: float = 0.2       # thấp → output ổn định
+    top_p: float = 0.9
+    max_output_tokens: int = 4096
+    response_mime_type: str = "application/json"  # bắt Gemini trả JSON
+```
+
+**3. `QcConfig`:** ngưỡng cho QC checks.
+
+**4. `LabelOutput`:** Pydantic model validate output từ Gemini.
+```python
+class LabelOutput(BaseModel):
+    summary: str
+    key_entities: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    refusal_reason: str | None = None
+```
+
+**5. `render_user_prompt`:** ghép dữ liệu vào template, cắt content tối đa 6000 ký tự (tránh tốn token).
+```python
+def render_user_prompt(*, title, category, source, content_text, content_max_chars=6000):
+    snippet = content_text or ""
+    if len(snippet) > content_max_chars:
+        snippet = snippet[:content_max_chars].rsplit(" ", 1)[0] + " [...]"
+    return USER_TEMPLATE.format(title=title or "", category=category or "", ...)
+```
+Dùng `.rsplit(" ", 1)[0]` để cắt tại ranh giới từ, không cắt giữa từ.
+
+**6. `parse_label_json`:** parse JSON output robust:
+- Thử `json.loads(raw)` trước.
+- Nếu lỗi, thử `json.loads(raw, strict=False)` (cho phép newline trong string).
+- Clamp `confidence > 1.0` → `1.0` (Gemini đôi khi trả 0.95*100 = 95).
+- Nếu `summary is None` nhưng có `refusal_reason` → `summary = ""`.
+
+### Bài tập 3.1 — render_user_prompt
+
+**Yêu cầu:** Viết `render_user_prompt` cắt content ở ranh giới từ.
+
+**Đáp án:**
+
+```python
+USER_TEMPLATE = """Tiêu đề: {title}
 Chuyên mục: {category}
 Nguồn: {source}
 
@@ -1666,62 +533,36 @@ Nội dung:
 \"\"\"
 
 Trả về JSON đúng schema:
-{{"summary": "...", "key_entities": ["..."], "confidence": 0.0, "refusal_reason": null}}"""
+{{"summary": "...", "key_entities": ["..."], "confidence": 0.0, "refusal_reason": null}}""".strip()
 
-def render_prompt(title, category, source, content_text, max_chars=6000):
+def render_user_prompt(*, title, category, source, content_text, content_max_chars=6000):
     snippet = content_text or ""
-    if len(snippet) > max_chars:
-        snippet = snippet[:max_chars].rsplit(" ", 1)[0] + " [...]"
-    return TEMPLATE.format(
-        title=title or "",
-        category=category or "",
-        source=source or "",
-        content_text=snippet,
+    if len(snippet) > content_max_chars:
+        snippet = snippet[:content_max_chars].rsplit(" ", 1)[0] + " [...]"
+    return USER_TEMPLATE.format(
+        title=title or "", category=category or "", source=source, content_text=snippet,
     )
 ```
 
-**Liên hệ dự án:** mở `labeling/prompt.py` dòng 24-41 (`USER_TEMPLATE`) và dòng 68-84 (`render_user_prompt()`). Logic tương tự.
-
-### Bài tập nhỏ 6.2 - Fake LLM trả JSON
-
-**Yêu cầu:** không gọi API thật. Viết `fake_llm(prompt)` trả string JSON:
-
-```json
-{"summary":"Đây là tóm tắt mẫu.","key_entities":["Demo"],"confidence":0.8}
+**Test:**
+```python
+long_text = "từ " * 3000  # 12000 ký tự
+result = render_user_prompt(title="Test", category="thoi_su", source="vnexpress", content_text=long_text)
+assert "[...]" in result
+assert len(result) < 7000
 ```
 
-**Đáp án gợi ý:**
+### Bài tập 3.2 — parse_label_json
+
+**Yêu cầu:** Viết `parse_label_json(raw_text)` trả `LabelOutput`. Xử lý:
+1. JSON invalid → thử `strict=False` → raise `ValueError` nếu vẫn lỗi.
+2. `confidence > 1.0` → clamp về `1.0`.
+3. `summary is None` + có `refusal_reason` → `summary = ""`.
+
+**Đáp án:**
 
 ```python
 import json
-
-def fake_llm(prompt):
-    return json.dumps(
-        {
-            "summary": "Đây là tóm tắt mẫu.",
-            "key_entities": ["Demo"],
-            "confidence": 0.8,
-        },
-        ensure_ascii=False,
-    )
-```
-
-### Bài tập nhỏ 6.3 - Parser JSON robust
-
-**Yêu cầu:** viết `parse_label_json(raw)` xử lý các case:
-
-1. JSON hợp lệ có summary và confidence → parse bình thường.
-2. `confidence=8` thì clamp về `1.0`.
-3. `confidence=-1` thì clamp về `0.0`.
-4. `summary=null` và có `refusal_reason` thì summary thành `""`, refusal hợp lệ.
-5. JSON nằm trong markdown fence `` ```json ... ``` `` vẫn parse được (LLM đôi khi wrap trong code block).
-6. JSON lỗi thì raise `ValueError` ngắn gọn.
-
-**Đáp án gợi ý:**
-
-```python
-import json
-import re
 from pydantic import BaseModel, Field, ValidationError
 
 class LabelOutput(BaseModel):
@@ -1730,63 +571,410 @@ class LabelOutput(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     refusal_reason: str | None = None
 
-def parse_label_json(raw):
-    # Strip markdown code fence if present
-    raw = raw.strip()
-    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)
-    if fence_match:
-        raw = fence_match.group(1).strip()
-
+def parse_label_json(raw_text: str) -> LabelOutput:
     try:
-        data = json.loads(raw)
+        data = json.loads(raw_text)
     except json.JSONDecodeError:
         try:
-            data = json.loads(raw, strict=False)
+            data = json.loads(raw_text, strict=False)
         except json.JSONDecodeError as exc:
             raise ValueError(f"LLM did not return valid JSON: {exc}") from exc
-
     if isinstance(data, dict):
         confidence = data.get("confidence")
-        if isinstance(confidence, (int, float)) and confidence > 1.0:
+        if isinstance(confidence, int | float) and confidence > 1.0:
             data["confidence"] = 1.0
         if data.get("summary") is None and data.get("refusal_reason"):
             data["summary"] = ""
-
     try:
         return LabelOutput(**data)
     except ValidationError as exc:
         raise ValueError(f"LLM JSON does not match schema: {exc}") from exc
 ```
 
-**Kết quả đúng:**
-
+**Test:**
 ```python
-parsed = parse_label_json('{"summary": null, "confidence": 8, "refusal_reason": "too short"}')
-assert parsed.summary == ""
-assert parsed.confidence == 1.0
-assert parsed.refusal_reason == "too short"
+# Bình thường
+out = parse_label_json('{"summary":"Tin A.","key_entities":["VN"],"confidence":0.9,"refusal_reason":null}')
+assert out.summary == "Tin A."
+
+# Confidence > 1.0 → clamp
+out = parse_label_json('{"summary":"X.","key_entities":[],"confidence":95.0}')
+assert out.confidence == 1.0
+
+# Refusal
+out = parse_label_json('{"summary":null,"key_entities":[],"confidence":0.0,"refusal_reason":"not news"}')
+assert out.summary == ""
+assert out.refusal_reason == "not news"
 ```
 
-**So sánh dự án:** mở `labeling/prompt.py` dòng 87-105 (`parse_label_json`). Logic gần giống.
+### 🎯 Bài cuối chặng 3 — Code lại `labeling/prompt.py`
 
-### Bài tập nhỏ 6.4 - Hiểu key rotation (per-call iteration)
+**Yêu cầu:** Tạo file `labeling/prompt.py` (105 dòng) chứa đầy đủ:
+- `PROMPT_VERSION = "1.2.0"`, `PROMPT_MODEL = "gemini-2.5-flash"`, `PROMPT_PROVIDER = "aistudio"`
+- `SYSTEM_PROMPT` — full text prompt biên tập viên
+- `USER_TEMPLATE` — template có `{title}`, `{category}`, `{source}`, `{content_text}`
+- `GenerationParams` dataclass (4 fields)
+- `QcConfig` dataclass (5 fields: min_words=40, max_words=90, min_sentences=2, max_sentences=4, entity_fuzzy_min_ratio=0.85)
+- `LabelOutput` BaseModel (4 fields)
+- `render_user_prompt(...)` function
+- `parse_label_json(raw_text)` function
 
-**Bối cảnh:** khi nhiều thread cùng gọi API (qua `asyncio.to_thread`), nếu dùng shared state (biến chung) để xoay key thì dễ race condition: thread A đánh dấu key 1 hết quota → thread B đang dùng key 2 nhưng bị đánh dấu nhầm. Giải pháp: mỗi lần gọi `generate()`, copy danh sách key ra biến local rồi iterate qua từng key. Thread-safe vì không chia sẻ state.
+**Kiểm tra:** So với `labeling/prompt.py` trong dự án — phải giống 100%.
 
-**Yêu cầu:** viết function `try_all_keys(keys, model, call_fn)`:
+---
 
-- Nhận list key, model name, và `call_fn(key, model)` giả lập API call.
-- Iterate qua từng key, nếu `call_fn` raise `QuotaError` thì thử key tiếp.
-- Nếu hết key mà vẫn lỗi, raise `AllKeysExhaustedError`.
-- Nếu thành công, return kết quả.
+## Chặng 4 — QC Rules (`labeling/qc.py`)
 
-**Đáp án gợi ý:**
+**Mục tiêu:** hiểu regex, Unicode normalization, fuzzy matching, entity extraction. Code lại `labeling/qc.py`.
+
+### Lý thuyết
+
+**1. Tại sao cần QC?**
+LLM không hoàn hảo. Summary có thể quá ngắn, quá dài, bịa số liệu, bịa tên riêng. QC checks tự động loại bỏ nhãn xấu trước khi train model.
+
+**2. Unicode NFC normalization:**
+Tiếng Việt có 2 cách biểu diễn "ả": 1 ký tự (precomposed) hoặc 2 ký tự (base + combining mark). NFC đảm bảo thống nhất:
+```python
+import unicodedata
+text = unicodedata.normalize("NFC", text)
+```
+
+**3. Regex cho tách câu:**
+```python
+import re
+_SENT_SPLIT = re.compile(r"(?<=[\.!?\u2026])\s+")
+sentences = _SENT_SPLIT.split(text)
+```
+`\u2026` = "…" (ellipsis). `(?<=...)` = lookbehind — split sau dấu câu nhưng giữ lại dấu câu.
+
+**4. Regex cho số và entity:**
+```python
+_NUMERIC = re.compile(r"\S*\d[\S]*")   # token chứa chữ số
+_ENTITY = re.compile(r"(?:[A-ZĐ...][\wÀ-ỹ]*(?:\s+[A-ZĐ...][\wÀ-ỹ]*)+)")  # chuỗi từ viết hoa liên tiếp
+```
+
+**5. Fuzzy matching (rapidfuzz):**
+```python
+from rapidfuzz import fuzz
+score = fuzz.partial_ratio("Nguyễn Văn A", "Ông Nguyễn Văn A cho biết...")
+# score ≈ 100 vì "Nguyễn Văn A" nằm trong chuỗi dài hơn
+```
+Dự án dùng `partial_ratio >= 85%` để kiểm tra entity có trong source text không.
+
+**6. Fallback khi không có rapidfuzz:**
+```python
+try:
+    from rapidfuzz import fuzz
+except ImportError:
+    from difflib import SequenceMatcher
+    class _FuzzFallback:
+        @staticmethod
+        def partial_ratio(a, b):
+            return SequenceMatcher(None, a, b).ratio() * 100
+    fuzz = _FuzzFallback()
+```
+
+**7. `_contains_numeric` logic:**
+- Thử exact match trước.
+- Collapse punctuation rồi thử lại.
+- Cuối cùng tìm nhóm 3+ chữ số (`_DIGIT_GROUP`) trong source.
+
+**8. `_contains_entity` logic:**
+- Exact match → `True`.
+- Collapse punct match → `True`.
+- Fuzzy `partial_ratio >= min_ratio * 100` → `True`.
+- Bất kỳ token nào >= 4 ký tự mà có trong source → `True`.
+
+**9. `run_qc` flow:**
+1. Normalize text (NFC).
+2. Check refusal → add reason.
+3. Word count check (40-90).
+4. Sentence count check (2-4).
+5. Number faithfulness (mọi số trong summary phải có trong source).
+6. Entity faithfulness (mọi entity trong summary phải có trong source).
+7. `passed = not reasons` (QC pass nếu không có reason nào).
+
+### Bài tập 4.1 — Tách câu tiếng Việt
+
+**Yêu cầu:** Viết `_sentences(text)` dùng regex.
+
+**Đáp án:**
+
+```python
+import re
+import unicodedata
+
+_SENT_SPLIT = re.compile(r"(?<=[\.!?\u2026])\s+")
+
+def _norm(text):
+    return unicodedata.normalize("NFC", text or "").strip()
+
+def _sentences(text):
+    return [part.strip() for part in _SENT_SPLIT.split(_norm(text)) if part.strip()]
+```
+
+**Test:**
+```python
+assert _sentences("Câu một. Câu hai! Câu ba?") == ["Câu một.", "Câu hai!", "Câu ba?"]
+assert len(_sentences("Một câu duy nhất.")) == 1
+```
+
+### Bài tập 4.2 — Extract số và entity
+
+**Yêu cầu:** Viết `_numerics(text)` và `_entities(text)`.
+
+**Đáp án:**
+
+```python
+_NUMERIC = re.compile(r"\S*\d[\S]*")
+_TITLE_CHARS = "A-ZĐÁÀẢÃẠÂẤẦẨẪẬĂẮẰẲẴẶÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ"
+_ENTITY = re.compile(rf"(?:[{_TITLE_CHARS}][\wÀ-ỹ]*(?:\s+[{_TITLE_CHARS}][\wÀ-ỹ]*)+)")
+
+def _numerics(text):
+    out = []
+    for match in _NUMERIC.finditer(text):
+        token = match.group(0).strip(".,;:%()[]{}")
+        if token:
+            out.append(token)
+    return out
+
+def _entities(text):
+    seen = set()
+    out = []
+    for match in _ENTITY.finditer(text):
+        entity = match.group(0).strip()
+        if entity and entity not in seen:
+            seen.add(entity)
+            out.append(entity)
+    return out
+```
+
+**Test:**
+```python
+assert _numerics("Có 1.500 người và 30% tăng trưởng") == ["1.500", "30%"]
+assert "Nguyễn Văn A" in _entities("Ông Nguyễn Văn A cho biết tại Hà Nội")
+```
+
+### Bài tập 4.3 — `_contains_numeric` và `_contains_entity`
+
+**Yêu cầu:** Viết 2 function kiểm tra số/entity trong summary có xuất hiện trong source không.
+
+**Đáp án:**
+
+```python
+_PUNCT_RE = re.compile(r"[\s\-\u2013\u2014\.\,;:\(\)\[\]\{\}/]+")
+_DIGIT_GROUP = re.compile(r"\d{3,}")
+
+def _collapse_punct(text):
+    return _PUNCT_RE.sub(" ", text).strip()
+
+def _contains_numeric(source, token):
+    if token in source:
+        return True
+    collapsed_source = _collapse_punct(source)
+    collapsed_token = _collapse_punct(token)
+    if collapsed_token and collapsed_token in collapsed_source:
+        return True
+    groups = _DIGIT_GROUP.findall(token)
+    return bool(groups and all(group in source for group in groups))
+
+def _contains_entity(source, entity, *, min_ratio):
+    if entity in source:
+        return True
+    collapsed_source = _collapse_punct(source)
+    collapsed_entity = _collapse_punct(entity)
+    if collapsed_entity and collapsed_entity in collapsed_source:
+        return True
+    if fuzz.partial_ratio(entity, source) >= min_ratio * 100:
+        return True
+    return any(len(token) >= 4 and token in source for token in entity.split())
+```
+
+### Bài tập 4.4 — `QcResult` và `run_qc`
+
+**Yêu cầu:** Viết `QcResult` dataclass và `run_qc(output, source_text, cfg)`.
+
+**Đáp án:**
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass(slots=True)
+class QcResult:
+    passed: bool
+    reasons: list[str] = field(default_factory=list)
+    word_count: int = 0
+    sentence_count: int = 0
+    missing_numbers: list[str] = field(default_factory=list)
+    missing_entities: list[str] = field(default_factory=list)
+
+    def to_dict(self):
+        return {
+            "passed": self.passed, "reasons": self.reasons,
+            "word_count": self.word_count, "sentence_count": self.sentence_count,
+            "missing_numbers": self.missing_numbers, "missing_entities": self.missing_entities,
+        }
+
+def run_qc(*, output, source_text, cfg=None):
+    cfg = cfg or QcConfig()
+    summary = _norm(output.summary)
+    source = _norm(source_text)
+    reasons = []
+    if output.refusal_reason:
+        reasons.append(f"llm_refusal:{output.refusal_reason}")
+    wc = _word_count(summary)
+    if wc < cfg.min_words:
+        reasons.append(f"too_short:{wc}<{cfg.min_words}")
+    if wc > cfg.max_words:
+        reasons.append(f"too_long:{wc}>{cfg.max_words}")
+    sc = len(_sentences(summary))
+    if sc < cfg.min_sentences:
+        reasons.append(f"too_few_sentences:{sc}<{cfg.min_sentences}")
+    if sc > cfg.max_sentences:
+        reasons.append(f"too_many_sentences:{sc}>{cfg.max_sentences}")
+    missing_numbers = [t for t in _numerics(summary) if not _contains_numeric(source, t)]
+    if missing_numbers:
+        reasons.append(f"unsupported_numbers:{','.join(missing_numbers[:5])}")
+    missing_entities = [
+        e for e in _entities(summary)
+        if not _contains_entity(source, e, min_ratio=cfg.entity_fuzzy_min_ratio)
+    ]
+    if missing_entities:
+        reasons.append(f"unsupported_entities:{','.join(missing_entities[:5])}")
+    return QcResult(
+        passed=not reasons, reasons=reasons, word_count=wc, sentence_count=sc,
+        missing_numbers=missing_numbers, missing_entities=missing_entities,
+    )
+```
+
+### 🎯 Bài cuối chặng 4 — Code lại `labeling/qc.py`
+
+**Yêu cầu:** Tạo file `labeling/qc.py` (153 dòng) chứa đầy đủ:
+- Import `rapidfuzz` với fallback `difflib`
+- 6 regex constants: `_SENT_SPLIT`, `_NUMERIC`, `_PUNCT_RE`, `_DIGIT_GROUP`, `_TITLE_CHARS`, `_ENTITY`
+- Helper functions: `_norm`, `_word_count`, `_sentences`, `_numerics`, `_collapse_punct`, `_contains_numeric`, `_entities`, `_contains_entity`
+- `QcResult` dataclass (6 fields + `to_dict`)
+- `run_qc(output, source_text, cfg)` function
+
+**Kiểm tra:** So với `labeling/qc.py` trong dự án — phải giống 100%.
+
+---
+
+## Chặng 5 — AI Studio Labeler (`labeling/gemini_labeler.py`)
+
+**Mục tiêu:** hiểu google.genai SDK, key rotation, model fallback, retry, thread safety. Code lại `labeling/gemini_labeler.py`.
+
+### Lý thuyết
+
+**1. Google AI Studio:**
+- Miễn phí, dùng API key (chuỗi ký tự), giới hạn request/phút.
+- Lấy key tại https://aistudio.google.com/apikey
+
+**2. SDK `google-genai`:**
+```python
+from google import genai
+from google.genai import types
+
+client = genai.Client(api_key="YOUR_KEY")
+response = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents="Xin chào",
+    config=types.GenerateContentConfig(
+        temperature=0.2,
+        max_output_tokens=4096,
+        response_mime_type="application/json",
+    ),
+)
+print(response.text)
+```
+
+**3. Key rotation (per-call local iteration):**
+Khi nhiều thread cùng gọi API (qua `asyncio.to_thread`), nếu dùng shared state để xoay key → race condition. Giải pháp: mỗi lần gọi `generate()`, copy danh sách key ra biến local rồi iterate qua từng key.
+
+```python
+def generate(self, *, system, user):
+    keys = list(self._keys)        # local copy, thread-safe
+    models = list(self._model_chain)
+    for model_name in models:
+        for key_idx, api_key in enumerate(keys):
+            try:
+                # gọi API với key này
+                ...
+                return text
+            except QuotaError:
+                continue  # thử key tiếp
+        # Hết key cho model này → thử model tiếp
+    raise GeminiLLMError("All models/keys exhausted")
+```
+
+**4. Model fallback chain:**
+`["gemini-2.5-flash", "gemini-2.0-flash"]` — nếu model đầu không khả dụng ("not found"), tự chuyển sang model tiếp.
+
+**5. Error classification:**
+- **Quota/rate limit** (429, "resource exhausted") → thử key tiếp.
+- **Transient** (500, 503, timeout) → raise `GeminiTransientError` → tenacity retry.
+- **Model not found** → break, thử model tiếp.
+- **Other** → raise `GeminiLLMError` (unrecoverable).
+
+**6. Retry với tenacity:**
+```python
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+@retry(
+    reraise=True,
+    retry=retry_if_exception_type(GeminiTransientError),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    stop=stop_after_attempt(6),
+)
+def generate(self, ...):
+    ...
+```
+Chỉ retry `GeminiTransientError`. Nếu `GeminiLLMError` → dừng ngay.
+
+**7. `except GeminiLLMError: raise` trước `except Exception`:**
+Khi `response.text is None`, raise `GeminiLLMError` bên trong `try`. Nếu không có `except GeminiLLMError: raise`, exception bị catch bởi `except Exception` → xử lý sai.
+
+**8. Thread-safe client cache:**
+```python
+self._clients_lock = threading.Lock()
+
+def _get_client(self, api_key):
+    with self._clients_lock:
+        if api_key not in self._clients:
+            self._clients[api_key] = genai.Client(api_key=api_key)
+        return self._clients[api_key]
+```
+
+### Bài tập 5.1 — Đọc key từ environment
+
+**Yêu cầu:** Viết `_keys_from_env()` giống dự án.
+
+**Đáp án:**
+
+```python
+import os
+
+class GeminiLLMError(RuntimeError):
+    pass
+
+def _keys_from_env():
+    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
+    if not raw:
+        single = os.environ.get("GEMINI_API_KEY", "").strip()
+        if single:
+            return [single]
+        raise GeminiLLMError("Set GEMINI_API_KEYS (comma-separated) or GEMINI_API_KEY")
+    return [k.strip() for k in raw.split(",") if k.strip()]
+```
+
+### Bài tập 5.2 — Per-call key iteration (không có API thật)
+
+**Yêu cầu:** Viết function `try_all_keys(keys, model, call_fn)` iterate qua keys, nếu `QuotaError` → thử key tiếp.
+
+**Đáp án:**
 
 ```python
 class QuotaError(Exception):
-    pass
-
-class AllKeysExhaustedError(Exception):
     pass
 
 def try_all_keys(keys, model, call_fn):
@@ -1795,13 +983,12 @@ def try_all_keys(keys, model, call_fn):
         try:
             return call_fn(key, model)
         except QuotaError as exc:
-            print(f"Key #{key_idx + 1} quota hit, trying next...")
             last_exc = exc
             continue
-    raise AllKeysExhaustedError(f"All {len(keys)} keys exhausted. Last: {last_exc}")
+    raise RuntimeError(f"All {len(keys)} keys exhausted. Last: {last_exc}")
 ```
 
-**Kết quả đúng:**
+**Test:**
 
 ```python
 call_count = 0
@@ -1817,316 +1004,215 @@ assert result == "OK with k3"
 assert call_count == 3
 ```
 
-**Tại sao không dùng shared KeyRing?** Khi `concurrency=5`, có 5 thread gọi đồng thời. Nếu dùng shared state, thread A mark key 1 hết → thread B đang dùng key 2 nhưng bị mark nhầm → cả 3 key bị exhausted sai. Per-call iteration tránh hoàn toàn race condition này.
+### Bài tập 5.3 — Error classification
 
-**Liên hệ dự án:** mở `labeling/gemini_labeler.py`, tìm method `generate()`. Dòng `keys = list(self._keys)` tạo local copy, sau đó `for key_idx, api_key in enumerate(keys)` iterate qua từng key mà không chia sẻ state giữa các thread.
+**Yêu cầu:** Viết function `classify_error(exc)` trả `"quota"`, `"transient"`, `"model_not_found"`, hoặc `"fatal"`.
 
-### Bài tập nhỏ 6.5 - Gọi AI Studio API (nếu có key)
-
-**Yêu cầu:** nếu bạn có API key AI Studio, thử gọi thật:
+**Đáp án:**
 
 ```python
-from google import genai
-from google.genai import types
-
-client = genai.Client(api_key="YOUR_KEY")
-response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents="Xin chào, bạn là ai?",
-    config=types.GenerateContentConfig(
-        temperature=0.2,
-        max_output_tokens=100,
-    ),
-)
-print(response.text)
+def classify_error(exc):
+    err = str(exc).lower()
+    if any(m in err for m in ("429", "resource has been exhausted", "quota", "rate limit", "too many requests")):
+        return "quota"
+    if any(m in err for m in ("deadline", "unavailable", "internal", "timeout", "503", "500")):
+        return "transient"
+    if "not found" in err or "does not exist" in err or "invalid" in err:
+        return "model_not_found"
+    return "fatal"
 ```
 
-Nếu chưa có key, bỏ qua bài này. Bạn vẫn có thể dùng `override_callable` (fake LLM) để test pipeline.
+### 🎯 Bài cuối chặng 5 — Code lại `labeling/gemini_labeler.py`
 
-### Bài tập nhỏ 6.6 - asyncio.to_thread
+**Yêu cầu:** Tạo file `labeling/gemini_labeler.py` (182 dòng) chứa đầy đủ:
+- Module docstring
+- `DEFAULT_MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.0-flash"]`
+- `GeminiLLMError`, `GeminiTransientError` exception classes
+- `OverrideFn` type alias
+- `GeminiLabeler` class:
+  - `__init__` (api_keys, model_chain, params, override_callable)
+  - `_get_client` (thread-safe with Lock)
+  - `generate` (tenacity retry, per-call local iteration, error classification, `except GeminiLLMError: raise`)
+- `_keys_from_env()` function
 
-**Yêu cầu:** viết hàm sync `slow_compute(n)` sleep 1 giây rồi trả `n * 2`. Gọi nó từ async code dùng `asyncio.to_thread()`.
-
-**Đáp án gợi ý:**
-
-```python
-import asyncio
-import time
-
-def slow_compute(n):
-    time.sleep(1)  # Giả lập API call chậm
-    return n * 2
-
-async def main():
-    # Chạy 3 calls song song nhờ to_thread
-    results = await asyncio.gather(
-        asyncio.to_thread(slow_compute, 1),
-        asyncio.to_thread(slow_compute, 2),
-        asyncio.to_thread(slow_compute, 3),
-    )
-    print(results)  # [2, 4, 6]
-
-asyncio.run(main())
-```
-
-**Liên hệ dự án:** mở `labeling/label_dataset.py` dòng 56:
-```python
-raw = await asyncio.to_thread(labeler.generate, system=SYSTEM_PROMPT, user=user_prompt)
-```
-`labeler.generate()` là hàm sync (gọi HTTP), nhưng `_label_one()` là async. `to_thread()` chạy hàm sync trong thread pool để không block event loop.
-
-### Bài tập nhỏ 6.7 - Label JSONL bằng fake LLM
-
-**Yêu cầu:** đọc file JSONL có 3 article, mỗi dòng có `title`, `content_text`. Với mỗi dòng:
-
-- Render prompt.
-- Gọi `fake_llm(prompt)`.
-- Parse output.
-- Ghi ra `labeled.jsonl` với các field cũ + `summary`, `key_entities`, `confidence`, `prompt_version`.
-
-**Kết quả đúng:** input 3 dòng tạo output 3 dòng, mỗi dòng có summary.
-
-### Bài cuối chặng 6 - Code lại fake labeling pipeline kiểu dự án
-
-**Bối cảnh:** trước khi gọi API thật, bạn cần hiểu pipeline labeling bằng fake LLM để không bị rối bởi credential/quota.
-
-**File tự tạo:** `practice_label_dataset.py`.
-
-**Yêu cầu cụ thể:**
-
-1. Tạo `PROMPT_VERSION = "practice_v1"`.
-2. Tạo `SYSTEM_PROMPT` mô tả vai trò biên tập viên.
-3. Tạo `render_user_prompt(title, category, source, content_text)`:
-   - Nếu content dài hơn 6000 ký tự thì cắt.
-   - Prompt phải yêu cầu output JSON.
-4. Tạo Pydantic model `LabelOutput`.
-5. Tạo `parse_label_json(raw)` robust theo bài 6.3.
-6. Tạo class `FakeLabeler`:
-   - `generate(system, user)` return JSON string.
-   - Summary lấy 2 câu đầu từ content.
-7. Tạo async `label_one(row, labeler, semaphore)`:
-   - Nhận dict article.
-   - Gọi render prompt → `asyncio.to_thread(labeler.generate, ...)` → parse → return dict mới.
-   - Nếu lỗi, return dict có `summary=""`, `qc_passed=False`.
-8. Tạo `label_rows(rows, concurrency=3)`:
-   - Dùng `asyncio.Semaphore`.
-   - `asyncio.gather()` label nhiều dòng.
-9. Tạo CLI:
-
-```bash
-python practice_label_dataset.py --input data/practice/articles.jsonl --output data/practice/labeled.jsonl --concurrency 3
-```
-
-**Schema output bắt buộc:**
-
-```json
-{
-  "article_id": "...",
-  "source": "...",
-  "url": "...",
-  "title": "...",
-  "content_text": "...",
-  "summary": "...",
-  "key_entities": [],
-  "confidence": 0.8,
-  "refusal_reason": null,
-  "prompt_version": "practice_v1",
-  "qc_passed": true
-}
-```
-
-**Kết quả đúng:**
-
-- Nếu input có 5 dòng, output có 5 dòng.
-- Dòng nào content rỗng thì vẫn không crash pipeline; có `refusal_reason`.
-- Parser clamp `confidence > 1` về `1.0`.
-- Bạn có thể giải thích: thay `FakeLabeler` bằng `GeminiLabeler(api_keys=[...])` là xong.
-
-**So sánh dự án:** mở `labeling/label_dataset.py` toàn bộ file. So sánh `_label_one()`, `label_rows()`, CLI.
-
-Checklist qua chặng:
-
-- Bạn hiểu teacher-student learning ở mức dự án.
-- Bạn tự viết được prompt renderer.
-- Bạn tự viết được parser JSON robust.
-- Bạn hiểu key rotation và model fallback.
-- Bạn hiểu `asyncio.to_thread()` dùng khi nào.
-- Bạn hiểu vì sao dự án cần `prompt_version`.
-- Bạn biết cách chuyển từ fake labeler sang AI Studio thật.
+**Kiểm tra:** So với `labeling/gemini_labeler.py` trong dự án — phải giống 100%.
 
 ---
 
-## Chặng 7 - QC Và Dataset Split
+## Chặng 6 — Label Dataset Pipeline (`labeling/label_dataset.py`)
 
-**Mục tiêu:** lọc summary kém chất lượng và chia dataset train/val/test ổn định.
+**Mục tiêu:** hiểu asyncio.to_thread, semaphore, pipeline orchestration. Code lại `labeling/label_dataset.py`.
 
-### Bạn cần hiểu gì?
+### Lý thuyết
 
-- Không phải label nào LLM tạo ra cũng nên đưa vào train.
-- **QC rule-based** giúp bắt lỗi đơn giản:
-  - Summary quá ngắn (< 40 từ) hoặc quá dài (> 90 từ).
-  - Summary quá ít câu (< 2) hoặc quá nhiều câu (> 4).
-  - **Number faithfulness:** số trong summary phải xuất hiện trong bài gốc (tránh LLM bịa số liệu).
-  - **Entity faithfulness:** tên riêng trong summary nên có trong bài gốc (tránh LLM bịa tên).
-  - LLM refusal: nếu LLM từ chối tóm tắt → fail.
-- **Fuzzy matching** (rapidfuzz): khi kiểm tra entity, không cần exact match 100%. `partial_ratio >= 85%` là chấp nhận được (vì LLM có thể viết tên hơi khác).
-- **Split dataset deterministic:** chạy lại vẫn ra cùng train/val/test.
-  - Dùng SHA-256 hash của `article_id` để quyết định bucket.
-  - Lấy byte đầu tiên: `< 26` → test (~10.2%), `< 52` → val (~10.2%), còn lại → train (~79.7%).
-- Dự án dùng artifact JSONL làm source of truth thay vì DB.
-
-### File/function trong dự án
-
-- `labeling/qc.py`
-  - `QcResult`: dataclass kết quả QC (passed, reasons, word_count, sentence_count, missing_numbers, missing_entities).
-  - `run_qc(output, source_text, cfg)`: chạy tất cả QC checks.
-  - `_word_count(text)`, `_sentences(text)`: đếm từ/câu.
-  - `_numerics(text)`: tìm token có chứa số.
-  - `_contains_numeric(source, token)`: kiểm tra số có trong bài gốc (xử lý dấu chấm phẩy, nhóm chữ số).
-  - `_entities(text)`: tìm tên riêng bằng regex (chuỗi từ viết hoa liên tiếp).
-  - `_contains_entity(source, entity, min_ratio)`: kiểm tra entity có trong bài gốc (exact match → collapsed punct → fuzzy partial_ratio → token-level).
-- `labeling/split_dataset.py`
-  - `split_bucket(article_id)`: SHA-256 → quyết định train/val/test.
-  - `dataset_record(row)`: giữ field cần cho training.
-  - `split_rows(rows)`: chia rows (bỏ qc_failed, bỏ empty content/summary).
-  - `export_splits(input_path, output_dir)`: ghi 3 file JSONL.
-  - `EXPECTED_V2_COUNTS`: `{"train": 1636, "val": 218, "test": 216}` — artifact lịch sử.
-
-### Bài tập nhỏ 7.1 - Đếm từ và câu
-
-**Yêu cầu:** viết:
-
-- `word_count(text)`.
-- `sentence_count(text)` tách câu theo `.`, `!`, `?`, `…`.
-
-**Đáp án gợi ý:**
-
+**1. `asyncio.to_thread`:**
+`GeminiLabeler.generate()` là sync function (blocking I/O). Để gọi nó trong async context:
 ```python
-import re
+raw = await asyncio.to_thread(labeler.generate, system=SYSTEM_PROMPT, user=user_prompt)
+```
+Python chạy `generate()` trong thread pool, không block event loop.
 
-def word_count(text):
-    return len((text or "").split())
-
-def sentence_count(text):
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?\u2026])\s+", text or "") if s.strip()]
-    return len(sentences)
+**2. `asyncio.Semaphore`:**
+Giới hạn concurrent requests. `Semaphore(5)` = tối đa 5 request cùng lúc:
+```python
+semaphore = asyncio.Semaphore(5)
+async with semaphore:
+    result = await asyncio.to_thread(...)
 ```
 
-**Kết quả đúng:** summary 2 câu trả `sentence_count == 2`.
-
-### Bài tập nhỏ 7.2 - Check số trong summary
-
-**Yêu cầu:** nếu summary có số `9999` nhưng content không có `9999`, QC fail.
-
-**Đáp án gợi ý:**
-
+**3. `asyncio.gather`:**
+Chạy nhiều coroutine đồng thời:
 ```python
-import re
-
-def extract_numbers(text):
-    return re.findall(r"\S*\d[\S]*", text or "")
-
-def numbers_supported(summary, content):
-    for token in extract_numbers(summary):
-        cleaned = token.strip(".,;:%()[]{}").strip()
-        if not cleaned:
-            continue
-        if cleaned in content:
-            continue
-        # Try digit groups
-        groups = re.findall(r"\d{3,}", cleaned)
-        if groups and all(g in content for g in groups):
-            continue
-        return False
-    return True
+tasks = [_label_one(row, labeler=labeler, semaphore=sem) for row in rows]
+results = await asyncio.gather(*tasks)
 ```
 
-**Kết quả đúng:**
-
-```python
-assert numbers_supported("Có 10 người tham gia.", "Sự kiện có 10 người tham gia.")
-assert not numbers_supported("Có 9999 người.", "Sự kiện có 10 người.")
+**4. Pipeline flow:**
+```
+read_jsonl → rows → label_rows → [_label_one(row) for each row] → write_jsonl
+                                      ↓
+                               render_user_prompt
+                               labeler.generate
+                               parse_label_json
+                               run_qc
+                               → labeled dict with summary, entities, qc_passed
 ```
 
-**Liên hệ dự án:** mở `labeling/qc.py` dòng 66-87, các function `_numerics()` và `_contains_numeric()`. Logic phức tạp hơn, xử lý thêm dấu chấm, dấu phẩy trong số.
+**5. Error handling:**
+`_label_one` catch `GeminiLLMError`, `GeminiTransientError`, `ValueError` → trả row với `summary=""`, `qc_passed=False` thay vì crash toàn pipeline.
 
-### Bài tập nhỏ 7.3 - Check entity với fuzzy matching
+### Bài tập 6.1 — asyncio.to_thread + Semaphore
 
-**Yêu cầu:** viết `entity_in_source(entity, source_text, min_ratio=85)`:
+**Yêu cầu:** Viết async function gọi sync `fake_generate(text)` qua `to_thread` với semaphore=2.
 
-- Exact match: entity trong source → True.
-- Fuzzy match: dùng `rapidfuzz.fuzz.partial_ratio(entity, source) >= min_ratio` → True.
-- Token-level: nếu bất kỳ token ≥ 4 ký tự của entity có trong source → True.
-
-**Đáp án gợi ý:**
+**Đáp án:**
 
 ```python
-from rapidfuzz import fuzz
+import asyncio, time
 
-def entity_in_source(entity, source_text, min_ratio=85):
-    if entity in source_text:
-        return True
-    if fuzz.partial_ratio(entity, source_text) >= min_ratio:
-        return True
-    return any(len(token) >= 4 and token in source_text for token in entity.split())
+def fake_generate(text):
+    time.sleep(0.1)  # giả lập API call
+    return f"Summary of: {text[:20]}"
+
+async def label_batch(texts, concurrency=2):
+    sem = asyncio.Semaphore(concurrency)
+    async def label_one(text):
+        async with sem:
+            return await asyncio.to_thread(fake_generate, text)
+    return await asyncio.gather(*[label_one(t) for t in texts])
+
+results = asyncio.run(label_batch(["Bài 1 nội dung dài...", "Bài 2 nội dung dài...", "Bài 3..."]))
+assert len(results) == 3
 ```
 
-**Kết quả đúng:**
+### Bài tập 6.2 — _label_one với error handling
+
+**Yêu cầu:** Viết `_label_one(row, labeler, semaphore)` trả dict đầy đủ fields. Nếu lỗi → trả dict với `summary=""`, `qc_passed=False`.
+
+**Đáp án:**
 
 ```python
-assert entity_in_source("Hà Nội", "Thủ đô Hà Nội mưa lớn")
-assert entity_in_source("Ha Noi", "Thủ đô Hà Nội mưa lớn")  # fuzzy
-assert not entity_in_source("Đà Nẵng", "Thủ đô Hà Nội mưa lớn")
+async def _label_one(row, *, labeler, semaphore):
+    user_prompt = render_user_prompt(
+        title=str(row.get("title") or ""),
+        category=str(row.get("category") or ""),
+        source=str(row.get("source") or ""),
+        content_text=str(row.get("content_text") or ""),
+    )
+    try:
+        async with semaphore:
+            raw = await asyncio.to_thread(labeler.generate, system=SYSTEM_PROMPT, user=user_prompt)
+        output = parse_label_json(raw)
+        qc = run_qc(output=output, source_text=f"{row.get('title') or ''} {row.get('content_text') or ''}")
+        return {
+            **row,
+            "summary": output.summary.strip(),
+            "key_entities": output.key_entities,
+            "confidence": output.confidence,
+            "refusal_reason": output.refusal_reason,
+            "prompt_version": PROMPT_VERSION,
+            "qc_passed": qc.passed,
+            "qc_details": qc.to_dict(),
+        }
+    except (GeminiLLMError, GeminiTransientError, ValueError) as exc:
+        return {
+            **row,
+            "summary": "", "key_entities": [], "confidence": 0.0,
+            "refusal_reason": str(exc), "prompt_version": PROMPT_VERSION,
+            "qc_passed": False,
+            "qc_details": {"passed": False, "reasons": [f"label_error:{exc}"]},
+        }
 ```
 
-**Liên hệ dự án:** mở `labeling/qc.py` dòng 101-110 (`_contains_entity`). Pattern tương tự.
+### 🎯 Bài cuối chặng 6 — Code lại `labeling/label_dataset.py`
 
-### Bài tập nhỏ 7.4 - QC summary đầy đủ
+**Yêu cầu:** Tạo file `labeling/label_dataset.py` (133 dòng) chứa đầy đủ:
+- `read_jsonl`, `write_jsonl` functions
+- `_label_one(row, labeler, semaphore)` async function
+- `label_rows(rows, concurrency, limit, labeler)` async function
+- `_build_parser()` → argparse (--input, --output, --limit, --concurrency)
+- `_run_cli(args)` async function
+- `main(argv)` function
 
-**Yêu cầu:** viết `run_qc(summary, content, refusal_reason=None)`:
+**Kiểm tra:** So với `labeling/label_dataset.py` trong dự án — phải giống 100%.
 
-- Fail nếu có `refusal_reason`.
-- Summary phải 40-90 từ.
-- Summary phải 2-4 câu.
-- Mọi số trong summary phải có trong content.
-- Return `{"passed": bool, "reasons": list[str]}`.
+---
 
-**Đáp án gợi ý:**
+## Chặng 7 — Split Dataset (`labeling/split_dataset.py`)
 
-```python
-def run_qc(summary, content, refusal_reason=None, min_words=40, max_words=90, min_sentences=2, max_sentences=4):
-    reasons = []
-    if refusal_reason:
-        reasons.append(f"llm_refusal:{refusal_reason}")
-    wc = word_count(summary)
-    if wc < min_words:
-        reasons.append(f"too_short:{wc}<{min_words}")
-    if wc > max_words:
-        reasons.append(f"too_long:{wc}>{max_words}")
-    sc = sentence_count(summary)
-    if sc < min_sentences:
-        reasons.append(f"too_few_sentences:{sc}<{min_sentences}")
-    if sc > max_sentences:
-        reasons.append(f"too_many_sentences:{sc}>{max_sentences}")
-    if not numbers_supported(summary, content):
-        reasons.append("unsupported_numbers")
-    return {"passed": not reasons, "reasons": reasons}
-```
+**Mục tiêu:** hiểu hash-based deterministic split, JSONL export. Code lại `labeling/split_dataset.py`.
 
-### Bài tập nhỏ 7.5 - Split deterministic
+### Lý thuyết
 
-**Yêu cầu:** chia theo `article_id` dùng SHA-256:
-
-- Byte đầu tiên < 26: test (~10%).
-- Byte đầu tiên < 52: val (~10%).
-- Còn lại: train (~80%).
-
-**Đáp án gợi ý:**
-
+**1. Deterministic split bằng hash:**
+Thay vì random split (kết quả khác nhau mỗi lần), dùng SHA-256 hash của `article_id`:
 ```python
 import hashlib
 
-def split_bucket(article_id, salt="vn-news-v1"):
+def split_bucket(article_id, *, salt="vn-news-v1"):
+    digest = hashlib.sha256(f"{salt}:{article_id}".encode()).digest()
+    bucket = digest[0]  # byte đầu tiên: 0-255
+    if bucket < 26:     # ~10%
+        return "test"
+    if bucket < 52:     # ~10%
+        return "val"
+    return "train"      # ~80%
+```
+Cùng `article_id` luôn vào cùng split. Không cần lưu trạng thái.
+
+**2. `dataset_record`:** chọn fields cần thiết cho training:
+```python
+def dataset_record(row):
+    return {
+        "article_id": int(row.get("article_id") or 0),
+        "source": str(row.get("source") or ""),
+        "url": str(row.get("url") or ""),
+        "title": str(row.get("title") or ""),
+        "category": row.get("category"),
+        "published_at": row.get("published_at"),
+        "content_text": str(row.get("content_text") or ""),
+        "summary": str(row.get("summary") or ""),
+        "prompt_version": str(row.get("prompt_version") or ""),
+    }
+```
+
+**3. Filter:** chỉ lấy rows có `qc_passed=True` và có `content_text` + `summary`.
+
+**4. `--check-v2-counts`:** flag kiểm tra số lượng khớp với report lịch sử.
+
+### Bài tập 7.1 — split_bucket
+
+**Yêu cầu:** Viết `split_bucket(article_id)` và test tính deterministic.
+
+**Đáp án:**
+
+```python
+import hashlib
+from typing import Literal
+
+SplitName = Literal["train", "val", "test"]
+
+def split_bucket(article_id: int, *, salt: str = "vn-news-v1") -> SplitName:
     digest = hashlib.sha256(f"{salt}:{article_id}".encode()).digest()
     bucket = digest[0]
     if bucket < 26:
@@ -2136,398 +1222,475 @@ def split_bucket(article_id, salt="vn-news-v1"):
     return "train"
 ```
 
-**Kết quả đúng:** cùng một `article_id` gọi nhiều lần luôn trả cùng split.
-
-**Liên hệ dự án:** mở `labeling/split_dataset.py` dòng 15-22. Logic giống hệt.
-
-### Bài tập nhỏ 7.6 - Dataset record
-
-**Yêu cầu:** từ labeled row có nhiều field, chỉ giữ field dùng cho training:
-
-- `article_id`, `source`, `url`, `title`, `category`, `published_at`, `content_text`, `summary`, `prompt_version`
-
-**Đáp án gợi ý:**
-
+**Test:**
 ```python
-DATASET_FIELDS = [
-    "article_id", "source", "url", "title", "category", "published_at",
-    "content_text", "summary", "prompt_version",
-]
-
-def dataset_record(row):
-    return {key: row.get(key, "") for key in DATASET_FIELDS}
+# Deterministic: chạy 2 lần cho kết quả giống nhau
+assert split_bucket(1) == split_bucket(1)
+assert split_bucket(100) == split_bucket(100)
+# Phân bố: đa số vào train
+from collections import Counter
+dist = Counter(split_bucket(i) for i in range(1000))
+assert dist["train"] > dist["val"]
+assert dist["train"] > dist["test"]
 ```
 
-### Bài cuối chặng 7 - Code lại QC và split dataset
+### 🎯 Bài cuối chặng 7 — Code lại `labeling/split_dataset.py`
 
-**Bối cảnh:** dataset train chỉ nên chứa bài đã pass QC và có schema ổn định.
+**Yêu cầu:** Tạo file `labeling/split_dataset.py` (100 dòng) chứa đầy đủ:
+- `SplitName` type alias
+- `EXPECTED_V2_COUNTS = {"train": 1636, "val": 218, "test": 216}`
+- `split_bucket(article_id, salt)` function
+- `read_jsonl`, `write_jsonl` functions
+- `dataset_record(row)` function
+- `split_rows(rows)` function — filter `qc_passed`, split by hash
+- `export_splits(input_path, output_dir)` function
+- `_build_parser()` → argparse
+- `main(argv)` function
 
-**File tự tạo:** `practice_qc_split.py`.
-
-**Yêu cầu cụ thể:**
-
-1. CLI hỗ trợ:
-
-```bash
-python practice_qc_split.py --input data/practice/labeled.jsonl --output data/practice/dataset
-```
-
-2. Đọc JSONL input.
-3. Với mỗi row, chạy QC:
-   - Fail nếu `summary` rỗng.
-   - Fail nếu có `refusal_reason`.
-   - Summary phải 40-90 từ.
-   - Summary phải 2-4 câu.
-   - Mọi số trong summary phải xuất hiện trong `content_text`.
-4. Chỉ giữ row QC pass.
-5. Chia train/val/test bằng hash `article_id`.
-6. Ghi 3 file:
-
-```text
-data/practice/dataset/train.jsonl
-data/practice/dataset/val.jsonl
-data/practice/dataset/test.jsonl
-```
-
-7. Mỗi dòng chỉ giữ dataset fields ở bài 7.6.
-8. In report cuối:
-
-```text
-total=...
-qc_passed=...
-train=...
-val=...
-test=...
-```
-
-**Kết quả đúng:**
-
-- Input có summary chứa số bịa thì bị loại.
-- Chạy lại cùng input thì số dòng train/val/test không đổi.
-- Nếu output folder chưa tồn tại, chương trình tự tạo.
-- JSONL output không chứa field thừa như `confidence`, `qc_details`, `label_error`.
-
-**So sánh dự án:** mở `labeling/qc.py` (QC đầy đủ) và `labeling/split_dataset.py` (split logic).
-
-Checklist qua chặng:
-
-- Bạn giải thích được vì sao cần QC trước khi train.
-- Bạn hiểu fuzzy matching cho entity check.
-- Bạn tự code được split deterministic.
-- Bạn hiểu dataset v2 là artifact lịch sử, không bị live crawl ghi đè.
+**Kiểm tra:** So với `labeling/split_dataset.py` trong dự án — phải giống 100%.
 
 ---
 
-## Chặng 8 - Fine-tune ViT5 + LoRA
+## Chặng 8 — Crawler phần 1: URL, Text, Robots (`app/crawler.py` dòng 1-250)
 
-**Mục tiêu:** hiểu đủ để chạy notebook fine-tune, giải thích được trong CV/phỏng vấn, và biết report metric ROUGE đến từ đâu.
+**Mục tiêu:** hiểu URL canonicalization, SimHash, text normalization, robots.txt, polite HTTP client. Code lại nửa đầu `app/crawler.py`.
 
-### Bạn cần hiểu gì?
+### Lý thuyết
 
-- Summarization trong dự án là bài toán **text-to-text**: input là bài báo, output là summary.
-- **Tokenizer** biến text thành token IDs để model đọc.
-  - `input_ids`: token của article.
-  - `attention_mask`: đánh dấu token thật (1) vs padding (0).
-  - `labels`: token của summary (mục tiêu model cần sinh ra).
-- **Seq2Seq model** (encoder-decoder) học sinh output sequence mới từ input sequence.
-- **ViT5** là T5 model pre-train trên dữ liệu tiếng Việt bởi VietAI.
-- **LoRA (Low-Rank Adaptation):**
-  - Thay vì update tất cả parameters (full fine-tune), LoRA chỉ thêm adapter nhỏ vào một số layer.
-  - `r=16`: rank (kích thước adapter). Nhỏ → ít param, nhanh, nhưng có thể kém hơn.
-  - `alpha=32`: scaling factor.
-  - `dropout=0.05`: regularization.
-  - `target_modules=["q", "v"]`: chỉ thêm adapter vào query và value attention.
-  - Lợi ích: train nhanh hơn, nhẹ hơn, checkpoint nhỏ hơn.
-- **ROUGE** metrics:
-  - ROUGE-1: overlap unigram (từ đơn) giữa prediction và reference.
-  - ROUGE-2: overlap bigram (cặp từ liên tiếp).
-  - ROUGE-L: longest common subsequence (thứ tự từ).
-  - F-measure kết hợp precision và recall.
-- **Hyperparameters** quan trọng: model, max lengths, batch size, gradient accumulation, learning rate, epoch, seed.
+**1. URL canonicalization:**
+Cùng một bài báo có nhiều URL variant:
+- `https://vnexpress.net/bai-viet-123.html?utm_source=fb`
+- `http://vnexpress.net/bai-viet-123.html`
+- `https://VNEXPRESS.NET//bai-viet-123.html/`
 
-### File/report trong dự án
-
-- `notebooks/finetune_vit5_lora.ipynb`
-  - Notebook fine-tune chính.
-  - Tham số được viết trực tiếp trong notebook để dễ show với nhà tuyển dụng.
-- `docs/training_report.md` (nếu có)
-  - Base model: `VietAI/vit5-base`.
-  - LoRA: `r=16`, `alpha=32`, `dropout=0.05`, target `[q, v]`.
-  - Best checkpoint: `models/vit5-news-v2/checkpoint-309`.
-  - Test ROUGE: `0.6055 / 0.3106 / 0.3804`.
-
-### Bài tập nhỏ 8.1 - Tạo dataset toy
-
-**Yêu cầu:** tạo list 6 sample:
-
+`canonicalize_url` chuẩn hóa tất cả về 1 URL:
 ```python
-{"text": "Bài viết dài ...", "summary": "Tóm tắt ngắn ..."}
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+_TRACKING_PREFIXES = ("utm_", "fbclid", "gclid", ...)
+
+def canonicalize_url(url):
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower() or "https"
+    netloc = parts.netloc.lower()
+    # Bỏ port mặc định
+    if (scheme == "http" and netloc.endswith(":80")) or (scheme == "https" and netloc.endswith(":443")):
+        netloc = netloc.rsplit(":", 1)[0]
+    # Bỏ tracking params
+    pairs = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=False)
+             if not any(k.lower().startswith(p) for p in _TRACKING_PREFIXES)]
+    pairs.sort()
+    path = parts.path or "/"
+    while "//" in path:
+        path = path.replace("//", "/")
+    if len(path) > 1 and path.endswith("/"):
+        path = path[:-1]
+    return urlunsplit((scheme, netloc, path, urlencode(pairs, doseq=True), ""))
 ```
 
-Chia 4 train, 1 val, 1 test.
+**2. URL hash:** `SHA-256(canonical_url)[:32]` → unique ID.
 
-**Đáp án gợi ý:**
-
+**3. SimHash (near-duplicate detection):**
+- Mỗi bài báo → character n-grams → weighted features → 64-bit hash.
+- 2 bài gần giống nhau → Hamming distance <= 3.
 ```python
-samples = [
-    {"text": "Hôm nay trời mưa lớn tại Hà Nội trong nhiều giờ.", "summary": "Hà Nội mưa lớn."},
-    {"text": "Đội tuyển Việt Nam thắng trận giao hữu với tỷ số 2-0.", "summary": "Việt Nam thắng 2-0."},
-    {"text": "Giá vàng tăng mạnh trong phiên giao dịch sáng nay.", "summary": "Giá vàng tăng."},
-    {"text": "Bão số 5 đổ bộ vào miền Trung gây thiệt hại lớn.", "summary": "Bão số 5 gây thiệt hại."},
-    {"text": "Thủ tướng dự hội nghị quốc tế tại Singapore.", "summary": "Thủ tướng dự hội nghị."},
-    {"text": "Mỹ công bố gói viện trợ mới cho Ukraine.", "summary": "Mỹ viện trợ Ukraine."},
-]
-train_data = samples[:4]
-val_data = samples[4:5]
-test_data = samples[5:]
-print(len(train_data), len(val_data), len(test_data))
+from simhash import Simhash
+from collections import Counter
+
+def _simhash_features(text):
+    joined = "".join(re.findall(r"[\w\u4e00-\u9fcc]+", text.lower()))
+    if len(joined) < 4:
+        return {joined: 1} if joined else {}
+    counts = Counter(joined[i:i+4] for i in range(len(joined) - 3))
+    return {f: min(w, 50) for f, w in counts.items()}
+
+def simhash64(text):
+    features = _simhash_features(text)
+    if not features:
+        return 0
+    value = int(Simhash(features, f=64).value) & ((1 << 64) - 1)
+    if value >= (1 << 63):
+        value -= 1 << 64
+    return value
+
+def hamming(a, b):
+    return bin((a ^ b) & ((1 << 64) - 1)).count("1")
 ```
 
-**Kết quả đúng:** in `4 1 1`.
-
-### Bài tập nhỏ 8.2 - Hiểu tokenizer output
-
-**Yêu cầu:** dùng tokenizer ViT5 từ Hugging Face, tokenize một câu, in `input_ids` và `attention_mask`.
-
-**Đáp án gợi ý:**
-
+**4. Text normalization:**
 ```python
-from transformers import AutoTokenizer
+import unicodedata, re
 
-tokenizer = AutoTokenizer.from_pretrained("VietAI/vit5-base")
-encoded = tokenizer("Tóm tắt: Đây là một bài báo ngắn.", max_length=32, truncation=True)
-print(encoded.keys())          # dict_keys(['input_ids', 'attention_mask'])
-print(encoded["input_ids"][:10])
-print(encoded["attention_mask"][:10])
-print(f"Token count: {len(encoded['input_ids'])}")
-```
-
-**Kết quả đúng:** thấy dict có `input_ids`, `attention_mask`. Mỗi phần tử là số nguyên.
-
-### Bài tập nhỏ 8.3 - Tạo preprocessing function
-
-**Yêu cầu:** viết function nhận batch có `content_text` và `summary`, trả tokenized input và labels.
-
-**Đáp án gợi ý:**
-
-```python
-def preprocess(batch, tokenizer, max_input=512, max_target=128):
-    inputs = ["Tóm tắt: " + text for text in batch["content_text"]]
-    model_inputs = tokenizer(inputs, max_length=max_input, truncation=True, padding=True)
-    labels = tokenizer(text_target=batch["summary"], max_length=max_target, truncation=True, padding=True)
-    model_inputs["labels"] = labels["input_ids"]
-    return model_inputs
-```
-
-### Bài tập nhỏ 8.4 - Đếm trainable parameters với LoRA
-
-**Yêu cầu:** sau khi bọc model bằng PEFT LoRA, in số parameter trainable.
-
-**Đáp án gợi ý:**
-
-```python
-from peft import LoraConfig, get_peft_model, TaskType
-
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    target_modules=["q", "v"],
-    task_type=TaskType.SEQ_2_SEQ_LM,
+_WS_RE = re.compile(r"\s+")
+_BOILERPLATE_RE = re.compile(
+    r"(?im)^\s*(?:đọc thêm|xem thêm|tags?:|từ khóa:|liên quan:|chia sẻ).*$"
 )
 
-peft_model = get_peft_model(base_model, lora_config)
-
-def print_trainable_parameters(model):
-    trainable = 0
-    total = 0
-    for _, param in model.named_parameters():
-        total += param.numel()
-        if param.requires_grad:
-            trainable += param.numel()
-    print(f"trainable={trainable:,} total={total:,} percent={100 * trainable / total:.2f}%")
-
-print_trainable_parameters(peft_model)
+def normalize_text(text):
+    text = unicodedata.normalize("NFC", text or "")
+    text = _BOILERPLATE_RE.sub("", text)
+    return _WS_RE.sub(" ", text).strip()
 ```
 
-**Kết quả đúng:** trainable nhỏ hơn total rất nhiều (thường < 1%).
+**5. robots.txt:**
+```python
+from urllib.robotparser import RobotFileParser
 
-### Bài tập nhỏ 8.5 - Tính ROUGE cho 2 câu
+parser = RobotFileParser("https://vnexpress.net/robots.txt")
+parser.parse(robots_text.splitlines())
+can_fetch = parser.can_fetch("vn-news-summarizer-research/0.1", url)
+```
 
-**Yêu cầu:** dùng `rouge_score` tính ROUGE giữa prediction và reference.
+**6. PoliteClient (async HTTP với rate limiting):**
+- Per-host asyncio Lock → chỉ 1 request tại một thời điểm per host.
+- `crawl_delay_s` giữa các request.
+- Retry với tenacity: 429, 5xx → retry.
 
-**Đáp án gợi ý:**
+**7. RobotsCache:**
+Cache `RobotFileParser` per host, chỉ fetch `robots.txt` 1 lần.
+
+### Bài tập 8.1 — canonicalize_url
+
+**Yêu cầu:** Viết `canonicalize_url(url)`.
+
+**Test:**
+```python
+assert canonicalize_url("https://vnexpress.net/bai.html?utm_source=fb") == "https://vnexpress.net/bai.html"
+assert canonicalize_url("HTTP://VNEXPRESS.NET:80//bai.html/") == "http://vnexpress.net/bai.html"
+assert canonicalize_url("https://a.com/b?z=1&a=2") == "https://a.com/b?a=2&z=1"
+```
+
+### Bài tập 8.2 — SimHash + Hamming
+
+**Yêu cầu:** Viết `simhash64(text)` và `hamming(a, b)`.
+
+**Test:**
+```python
+h1 = simhash64("Hà Nội hôm nay trời nắng đẹp, nhiệt độ 32 độ C")
+h2 = simhash64("Hà Nội hôm nay trời nắng đẹp, nhiệt độ 33 độ C")  # gần giống
+h3 = simhash64("Bóng đá Việt Nam thắng Thái Lan 2-0 tại SEA Games")  # khác hẳn
+assert hamming(h1, h2) <= 5    # gần giống → Hamming nhỏ
+assert hamming(h1, h3) > 10    # khác hẳn → Hamming lớn
+```
+
+### Bài tập 8.3 — normalize_text
+
+**Yêu cầu:** Viết `normalize_text(text)` loại bỏ boilerplate, gộp whitespace, NFC.
+
+**Test:**
+```python
+assert normalize_text("  Tin  tức   hôm nay  ") == "Tin tức hôm nay"
+assert normalize_text("Nội dung.\nĐọc thêm: bài liên quan") == "Nội dung."
+```
+
+### Bài tập 8.4 — PoliteClient
+
+**Yêu cầu:** Viết `PoliteClient` class với per-host lock, crawl delay, retry.
+
+**Đáp án (rút gọn):**
 
 ```python
-from rouge_score import rouge_scorer
+import asyncio, time, random
+import httpx
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+from urllib.parse import urlsplit
 
-scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=False)
-score = scorer.score("Hà Nội mưa lớn.", "Hà Nội có mưa lớn trong ngày.")
-print(f"ROUGE-1: {score['rouge1'].fmeasure:.4f}")
-print(f"ROUGE-2: {score['rouge2'].fmeasure:.4f}")
-print(f"ROUGE-L: {score['rougeL'].fmeasure:.4f}")
+class PoliteClient:
+    def __init__(self, *, user_agent, timeout_s=20.0, crawl_delay_s=1.0, max_retries=3):
+        self._client = httpx.AsyncClient(
+            timeout=timeout_s,
+            headers={"User-Agent": user_agent, "Accept-Language": "vi,en;q=0.7"},
+            follow_redirects=True,
+        )
+        self._min_interval = max(crawl_delay_s, 0.0)
+        self._last_by_host = {}
+        self._locks = {}
+        self._max_retries = max_retries
+
+    async def get(self, url):
+        host = urlsplit(url).netloc.lower()
+        lock = self._locks.setdefault(host, asyncio.Lock())
+        async with lock:
+            if self._min_interval > 0:
+                last = self._last_by_host.get(host, 0.0)
+                wait_s = self._min_interval - (time.monotonic() - last)
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s + random.uniform(0, 0.05))
+            self._last_by_host[host] = time.monotonic()
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(self._max_retries + 1),
+            wait=wait_exponential(multiplier=1, min=1, max=15),
+            retry=retry_if_exception_type(httpx.HTTPError), reraise=True,
+        ):
+            with attempt:
+                response = await self._client.get(url)
+                if response.status_code == 429 or 500 <= response.status_code < 600:
+                    raise httpx.HTTPStatusError(
+                        f"retryable status {response.status_code}",
+                        request=response.request, response=response,
+                    )
+                return response
+        raise RuntimeError("unreachable")
+
+    async def aclose(self):
+        await self._client.aclose()
 ```
 
-### Bài cuối chặng 8 - Tạo notebook mini fine-tune flow
+### 🎯 Bài cuối chặng 8 — Code lại `app/crawler.py` dòng 1-250
 
-**Bối cảnh:** bạn chưa cần train ra metric đẹp. Mục tiêu là hiểu pipeline notebook từ dataset tới generate/eval.
+**Yêu cầu:** Code lại phần đầu `app/crawler.py` (khoảng 250 dòng) gồm:
+- Tất cả imports
+- Constants: `_WS_RE`, `_BOILERPLATE_RE`, `_CATEGORY_FROM_PATH_RE`, `_SIMHASH_TOKEN_RE`, `_SIMHASH_NGRAM_WIDTH`, `_SIMHASH_WEIGHT_CAP`, `_TRACKING_PREFIXES`
+- `ExtractedArticle` dataclass
+- `PoliteClient` class (full)
+- `RobotsCache` class (full)
+- Functions: `normalize_text`, `word_count`, `canonicalize_url`, `url_hash`, `_simhash_features`, `simhash64`, `hamming`, `_to_utc`, `_category_from_url`
 
-**File tự tạo:** `notebooks/practice_finetune_flow.ipynb`.
-
-**Yêu cầu cụ thể theo cell:**
-
-1. **Cell 1 - Install/import**
-   - Import `transformers`, `datasets`, `rouge_score`, `torch`, `peft`.
-2. **Cell 2 - Config viết trực tiếp**
-   - `MODEL_NAME = "VietAI/vit5-base"` hoặc model nhỏ hơn nếu máy yếu.
-   - `MAX_INPUT_LENGTH = 512`.
-   - `MAX_TARGET_LENGTH = 128`.
-   - `LEARNING_RATE = 5e-5`.
-   - `NUM_EPOCHS = 1`.
-   - `SEED = 42`.
-3. **Cell 3 - Load dataset toy**
-   - Tạo ít nhất 20 sample text-summary.
-   - Chia train/val/test.
-4. **Cell 4 - Tokenizer/preprocess**
-   - Tokenize input và target.
-5. **Cell 5 - Load model**
-   - Load seq2seq model.
-   - Bọc LoRA với config: `r=16`, `alpha=32`, `dropout=0.05`, `target_modules=["q", "v"]`.
-   - In trainable parameters.
-6. **Cell 6 - TrainingArguments/Trainer**
-   - Train 1 epoch.
-7. **Cell 7 - Generate thử**
-   - Generate summary cho 3 sample.
-8. **Cell 8 - Evaluate ROUGE**
-   - In dict có `rouge1`, `rouge2`, `rougeL`.
-9. **Cell 9 - Ghi chú phỏng vấn**
-   - Viết 5 dòng: vì sao dùng ViT5, vì sao dùng LoRA, vì sao dùng ROUGE.
-
-**Kết quả đúng:**
-
-- Notebook chạy tuần tự không lỗi.
-- Có cell in dataset size.
-- Có cell in trainable parameters.
-- Có cell generate summary.
-- Có cell tính ROUGE.
-
-Checklist qua chặng:
-
-- Bạn hiểu notebook chính của dự án đang làm gì.
-- Bạn giải thích được các hyperparameter quan trọng.
-- Bạn biết report training là kết quả lịch sử trên dataset v2 và checkpoint đúng.
+**Kiểm tra:** So với `app/crawler.py` dòng 1-257 trong dự án.
 
 ---
 
-## Chặng 9 - Inference Với Fine-tuned Model
+## Chặng 9 — Crawler phần 2: Feed, Extract, Orchestration (`app/crawler.py` dòng 250-514)
 
-**Mục tiêu:** load model đã fine-tune và dùng để tóm tắt bài mới, chuẩn bị cho web demo.
+**Mục tiêu:** hiểu RSS parsing, HTML extraction, crawler orchestration. Code lại nửa sau `app/crawler.py`.
 
-### Bạn cần hiểu gì?
+### Lý thuyết
 
-- Training là giai đoạn học, inference là giai đoạn dùng model để dự đoán.
-- Hugging Face tokenizer phải khớp với model.
-- **PEFT adapter loading:**
-  - Checkpoint LoRA chỉ chứa adapter weights, không chứa base model weights.
-  - Cần load base model trước (`AutoModelForSeq2SeqLM.from_pretrained(base_name)`).
-  - Rồi load adapter lên base model (`PeftModel.from_pretrained(base_model, adapter_path)`).
-  - `PeftConfig.from_pretrained(adapter_path)` cho biết base model gốc.
-  - Nếu adapter folder không có `tokenizer.json`, load tokenizer từ base model.
-- **Lazy loading** nghĩa là chưa load model khi import file, chỉ load khi gọi summarize lần đầu.
-  - Giúp FastAPI khởi động nhanh.
-  - Tránh load model nếu không cần (ví dụ chỉ gọi `/healthz`).
-- Batch inference giúp summarize nhiều bài cùng lúc hiệu quả hơn.
-- **Generation config** ảnh hưởng output:
-  - `num_beams=4`: beam search (nhiều nhánh tìm output tốt nhất).
-  - `max_new_tokens=128`: giới hạn độ dài output.
-  - `no_repeat_ngram_size=3`: tránh lặp 3-gram.
-  - `length_penalty=1.0`: ưu tiên output dài/ngắn hơn.
-  - `early_stopping=True`: dừng beam khi tìm đủ.
-- Web app không nên crash nếu input rỗng.
-
-### File/function trong dự án
-
-- `app/summarizer.py`
-  - `GenerationConfig`: dataclass chứa tham số generate.
-  - `ViT5Summarizer`: class load tokenizer/model.
-    - `__init__()`: nhận `model_id`, `base_model_id`, `token`, `device`, `generation`. Đọc từ env var nếu không truyền.
-    - `_load_as_peft_adapter()`: thử load như LoRA adapter (PeftConfig → base model → PeftModel).
-    - `_ensure_loaded()`: lazy load. Thử PEFT trước, fallback load trực tiếp.
-    - `summarize(text)`: tóm tắt 1 bài.
-    - `summarize_batch(texts)`: tóm tắt nhiều bài, xử lý empty input.
-
-### Bài tập nhỏ 9.1 - Class lazy loading giả
-
-**Yêu cầu:** viết class `LazyObject` chỉ load data khi gọi `get()` lần đầu.
-
-**Đáp án gợi ý:**
-
+**1. RSS parsing với feedparser:**
 ```python
-class LazyObject:
-    def __init__(self):
-        self.data = None
-        self.load_count = 0
-
-    def _load(self):
-        self.load_count += 1
-        self.data = {"value": 123}
-
-    def get(self):
-        if self.data is None:
-            self._load()
-        return self.data
-
-obj = LazyObject()
-obj.get()
-obj.get()
-assert obj.load_count == 1
+import feedparser
+parsed = feedparser.parse(response.content)
+for entry in parsed.entries:
+    link = entry.get("link")
+    title = entry.get("title")
+    category = entry.get("tags", [{}])[0].get("term") if entry.get("tags") else None
+    published = entry.get("published") or entry.get("updated")
 ```
 
-### Bài tập nhỏ 9.2 - Summarizer giả không dùng model
-
-**Yêu cầu:** viết `SimpleFakeSummarizer`:
-
-- `summarize(text)` trả 30 từ đầu.
-- Input rỗng trả `""`.
-- `summarize_batch(texts)` trả list cùng độ dài (input rỗng → `""`).
-
-**Đáp án gợi ý:**
-
+**2. HTML extraction — trafilatura + readability fallback:**
 ```python
-class SimpleFakeSummarizer:
-    def summarize(self, text):
-        if not text or not text.strip():
-            return ""
-        return " ".join(text.split()[:30])
+import trafilatura, json
+from readability import Document
+from bs4 import BeautifulSoup
 
-    def summarize_batch(self, texts):
-        return [self.summarize(text) for text in texts]
+# Thử trafilatura trước (chính xác hơn)
+extracted = trafilatura.extract(html, url=url, with_metadata=True, output_format="json",
+                                include_comments=False, include_tables=False, favor_precision=True)
+if extracted:
+    doc = json.loads(extracted)
+    text = doc.get("text")
+
+# Fallback: readability + BeautifulSoup
+if text is None:
+    doc = Document(html)
+    soup = BeautifulSoup(doc.summary(), "lxml")
+    text = soup.get_text(" ")
 ```
 
-**Kết quả đúng:**
-
+**3. Date parsing:**
 ```python
-s = SimpleFakeSummarizer()
-assert s.summarize("") == ""
-assert len(s.summarize_batch(["a b c", "", "d e"])) == 3
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
+
+def _to_utc(raw):
+    if isinstance(raw, datetime):
+        dt = raw
+    else:
+        dt = parsedate_to_datetime(str(raw))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 ```
 
-### Bài tập nhỏ 9.3 - Load model name từ env
-
-**Yêu cầu:** đọc biến môi trường `HF_MODEL_ID`, nếu không có thì dùng default.
-
-**Đáp án gợi ý:**
-
-```python
-import os
-
-model_id = os.environ.get("HF_MODEL_ID", "VietAI/vit5-base")
-print(model_id)
+**4. `crawl_articles` orchestration:**
+```
+for source in enabled_sources:
+    for feed_url in source.rss:
+        candidates = fetch_feed(feed_url)
+    for candidate in candidates:
+        if URL đã thấy → skip (dedupe)
+        if robots.txt cấm → skip
+        response = client.get(url)
+        extracted = extract_from_html(response.text)
+        if extracted is None → skip
+        if SimHash gần giống bài đã crawl → skip (near-dedupe)
+        → CrawledArticle → articles list
 ```
 
-### Bài tập nhỏ 9.4 - Generation config
+**5. CLI:**
+- `--mode {labeling, demo}` — demo mặc định 5 bài, labeling không giới hạn.
+- `--output` — ghi JSONL.
+- `--source` — chỉ crawl nguồn cụ thể.
+- `--verbose` — in progress.
 
-**Yêu cầu:** tạo dataclass:
+### Bài tập 9.1 — fetch_feed
+
+**Yêu cầu:** Viết `fetch_feed(client, source, feed_url)` trả `list[ArticleCandidate]`.
+
+**Đáp án:**
+
+```python
+async def fetch_feed(client, *, source, feed_url):
+    try:
+        response = await client.get(feed_url)
+    except Exception as exc:
+        print(f"[crawler] RSS fetch failed {feed_url}: {exc}", file=sys.stderr)
+        return []
+    parsed = feedparser.parse(response.content)
+    if parsed.bozo and not parsed.entries:
+        return []
+    candidates = []
+    for entry in parsed.entries:
+        link = str(entry.get("link") or "")
+        title = str(entry.get("title") or "").strip()
+        if not link or not title:
+            continue
+        category = None
+        if entry.get("tags"):
+            category = entry["tags"][0].get("term") or None
+        candidates.append(ArticleCandidate(
+            source=source.id, source_name=source.name,
+            url=canonicalize_url(link), title=normalize_text(title),
+            published_at=_to_utc(entry.get("published") or entry.get("updated") or entry.get("pubDate") or entry.get("dc_date")),
+            category=canonical_category(category or _category_from_url(link)),
+            author=(str(entry.get("author")) if entry.get("author") else None),
+        ))
+    return candidates
+```
+
+### Bài tập 9.2 — extract_from_html
+
+**Yêu cầu:** Viết `extract_from_html(html, url)` → `ExtractedArticle | None`.
+
+**Đáp án:**
+
+```python
+def extract_from_html(html, *, url=None):
+    if not html:
+        return None
+    try:
+        extracted = trafilatura.extract(html, url=url, with_metadata=True, output_format="json",
+                                        include_comments=False, include_tables=False, favor_precision=True)
+        if extracted:
+            doc = json.loads(extracted)
+            text = normalize_text(str(doc.get("text") or ""))
+            if word_count(text) >= 50:
+                return ExtractedArticle(
+                    title=(str(doc.get("title")) if doc.get("title") else None),
+                    author=(str(doc.get("author")) if doc.get("author") else None),
+                    published_at=_to_utc(doc.get("date")),
+                    language=(str(doc.get("language")) if doc.get("language") else None),
+                    content_text=text, word_count=word_count(text),
+                )
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        doc = Document(html)
+        soup = BeautifulSoup(doc.summary(), "lxml")
+        text = normalize_text(soup.get_text(" "))
+        if word_count(text) >= 50:
+            return ExtractedArticle(
+                title=doc.short_title() or None, author=None,
+                published_at=None, language=None,
+                content_text=text, word_count=word_count(text),
+            )
+    except Exception:
+        pass
+    return None
+```
+
+### 🎯 Bài cuối chặng 9 — Code lại `app/crawler.py` hoàn chỉnh
+
+**Yêu cầu:** Tạo file `app/crawler.py` (514 dòng) đầy đủ, kết hợp chặng 8 + chặng 9:
+- Tất cả imports, constants, classes từ chặng 8
+- `fetch_feed`, `extract_from_html` từ chặng 9
+- `crawl_articles` async function (full orchestration logic)
+- `write_jsonl`, `_validate_cli_output_path`, `_build_parser`, `_run_cli`, `main`
+
+**Kiểm tra:** So với `app/crawler.py` trong dự án — phải giống 100%.
+
+---
+
+## Chặng 10 — ViT5 Summarizer (`app/summarizer.py`)
+
+**Mục tiêu:** hiểu lazy loading, PEFT adapter, tokenizer, batch inference. Code lại `app/summarizer.py`.
+
+### Lý thuyết
+
+**1. Lazy loading:**
+Model nặng (hàng GB). Không load ngay khi tạo object, mà load lần đầu gọi `summarize()`:
+```python
+class ViT5Summarizer:
+    def __init__(self, model_id=None, ...):
+        self.model_id = model_id or os.environ.get("HF_MODEL_ID") or "VietAI/vit5-base"
+        self._model = None  # chưa load
+        self._tokenizer = None
+
+    def _ensure_loaded(self):
+        if self._model is not None:
+            return self._model, self._tokenizer
+        # Load model + tokenizer ở đây
+        ...
+```
+
+**2. PEFT adapter loading:**
+Model fine-tune bằng LoRA chỉ lưu adapter nhỏ (~vài MB), không lưu full model. Load:
+```python
+from peft import PeftConfig, PeftModel
+
+peft_cfg = PeftConfig.from_pretrained(adapter_id)
+base_model = AutoModelForSeq2SeqLM.from_pretrained(peft_cfg.base_model_name_or_path)
+model = PeftModel.from_pretrained(base_model, adapter_id)
+```
+
+Nếu `model_id` không phải PEFT adapter → load trực tiếp:
+```python
+model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+```
+
+**3. `GenerationConfig`:**
+```python
+@dataclass(slots=True)
+class GenerationConfig:
+    max_input_length: int = 1024    # cắt input dài hơn 1024 token
+    max_new_tokens: int = 128       # summary tối đa 128 token
+    num_beams: int = 4              # beam search cho chất lượng
+    no_repeat_ngram_size: int = 3   # không lặp 3-gram
+    length_penalty: float = 1.0
+    early_stopping: bool = True
+    batch_size: int = 4
+```
+
+**4. Batch inference:**
+```python
+def summarize_batch(self, texts):
+    # Filter empty texts
+    empty_mask = [not text or not text.strip() for text in texts]
+    non_empty = [t for t, empty in zip(texts, empty_mask) if not empty]
+    # Tokenize + generate in batches
+    for start in range(0, len(non_empty), self.generation.batch_size):
+        batch = non_empty[start:start + batch_size]
+        inputs = tokenizer(batch, max_length=1024, truncation=True, padding=True, return_tensors="pt")
+        outputs = model.generate(**inputs, max_new_tokens=128, num_beams=4, ...)
+        decoded.extend(tokenizer.batch_decode(outputs, skip_special_tokens=True))
+    # Re-insert empty strings
+    ...
+```
+
+**5. Tokenizer source cho PEFT:**
+PEFT adapter thường không chứa tokenizer. Nếu local path không có `tokenizer.json`, dùng tokenizer từ base model:
+```python
+tokenizer_source = self.model_id
+if Path(self.model_id).exists() and not (Path(self.model_id) / "tokenizer.json").exists():
+    tokenizer_source = base_name
+```
+
+### Bài tập 10.1 — GenerationConfig
+
+**Yêu cầu:** Tạo `GenerationConfig` dataclass.
+
+**Đáp án:**
 
 ```python
 from dataclasses import dataclass
@@ -2543,208 +1706,226 @@ class GenerationConfig:
     batch_size: int = 4
 ```
 
-Tạo 2 config: default và custom (`max_new_tokens=64`, `num_beams=2`).
+### Bài tập 10.2 — Lazy loading pattern
 
-### Bài tập nhỏ 9.5 - Hiểu PEFT adapter loading
+**Yêu cầu:** Viết `_ensure_loaded` với PEFT fallback logic.
 
-**Yêu cầu:** viết pseudocode (hoặc code thật nếu có model) cho quy trình load PEFT adapter:
-
-```python
-# 1. Thử load PeftConfig để biết base model
-# 2. Load base model
-# 3. Load adapter lên base model
-# 4. Load tokenizer (từ adapter nếu có, nếu không thì từ base)
-```
-
-**Đáp án gợi ý:**
+**Đáp án:**
 
 ```python
-from peft import PeftConfig, PeftModel
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-from pathlib import Path
+def _load_as_peft_adapter(self, transformers):
+    try:
+        from peft import PeftConfig, PeftModel
+        peft_cfg = PeftConfig.from_pretrained(self.model_id, token=self.token)
+        base_name = self.base_model_id or peft_cfg.base_model_name_or_path
+        base_model = transformers.AutoModelForSeq2SeqLM.from_pretrained(base_name, token=self.token)
+        model = PeftModel.from_pretrained(base_model, self.model_id, token=self.token)
+        tokenizer_source = self.model_id
+        if Path(self.model_id).exists() and not (Path(self.model_id) / "tokenizer.json").exists():
+            tokenizer_source = base_name
+        tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_source, token=self.token)
+        return model, tokenizer
+    except Exception:
+        return None
 
-def load_peft_model(adapter_id, base_model_override=None, token=None):
-    peft_cfg = PeftConfig.from_pretrained(adapter_id, token=token)
-    base_name = base_model_override or peft_cfg.base_model_name_or_path
-
-    base_model = AutoModelForSeq2SeqLM.from_pretrained(base_name, token=token)
-    model = PeftModel.from_pretrained(base_model, adapter_id, token=token)
-
-    # Tokenizer: adapter folder nếu có, nếu không thì base model
-    tokenizer_source = adapter_id
-    if Path(adapter_id).exists() and not (Path(adapter_id) / "tokenizer.json").exists():
-        tokenizer_source = base_name
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, token=token)
-
+def _ensure_loaded(self):
+    if self._model is not None and self._tokenizer is not None:
+        return self._model, self._tokenizer
+    import transformers
+    loaded = self._load_as_peft_adapter(transformers)
+    if loaded is None:
+        model = transformers.AutoModelForSeq2SeqLM.from_pretrained(self.model_id, token=self.token)
+        tokenizer = transformers.AutoTokenizer.from_pretrained(self.model_id, token=self.token)
+    else:
+        model, tokenizer = loaded
+    if self.device:
+        model.to(self.device)
+    model.eval()
+    self._model = model
+    self._tokenizer = tokenizer
     return model, tokenizer
 ```
 
-**Liên hệ dự án:** mở `app/summarizer.py` dòng 48-68 (`_load_as_peft_adapter`). Logic tương tự.
+### Bài tập 10.3 — summarize_batch
 
-### Bài cuối chặng 9 - Code lại summarizer class kiểu dự án
+**Yêu cầu:** Viết `summarize_batch(texts)` xử lý empty texts, batch processing, re-insert empty.
 
-**Bối cảnh:** web demo cần một class duy nhất để nhận list text và trả list summary.
+**Đáp án:**
 
-**File tự tạo:** `practice_inference.py`.
-
-**Yêu cầu cụ thể:**
-
-1. Tạo dataclass `GenerationConfig` gồm:
-   - `max_input_length`, `max_new_tokens`, `num_beams`, `no_repeat_ngram_size`, `length_penalty`, `early_stopping`, `batch_size`
-2. Tạo class `SimpleSummarizer`:
-   - `__init__(model_id=None, base_model_id=None, token=None, device=None, generation=None)`.
-   - Nếu `model_id` không truyền, đọc từ `HF_MODEL_ID`.
-   - Có private fields `_model`, `_tokenizer`.
-3. Viết `_load_as_peft_adapter()`: thử load LoRA. Return `(model, tokenizer)` hoặc `None`.
-4. Viết `_ensure_loaded()`:
-   - Thử PEFT trước, fallback load trực tiếp.
-   - Gọi nhiều lần không load lại (lazy).
-   - `model.eval()` để inference mode.
-5. Viết `summarize(text)`:
-   - Text rỗng trả `""`.
-6. Viết `summarize_batch(texts)`:
-   - Return list cùng độ dài input.
-   - Phần tử input rỗng trả `""`.
-   - Chia batch theo `batch_size`.
-7. CLI test:
-
-```bash
-USE_FAKE_MODEL=1 python practice_inference.py --text "Một đoạn tin tức dài..."
+```python
+def summarize_batch(self, texts):
+    if not texts:
+        return []
+    empty_mask = [not text or not text.strip() for text in texts]
+    non_empty = [text for text, is_empty in zip(texts, empty_mask, strict=True) if not is_empty]
+    if not non_empty:
+        return ["" for _ in texts]
+    model, tokenizer = self._ensure_loaded()
+    decoded = []
+    for start in range(0, len(non_empty), self.generation.batch_size):
+        batch = non_empty[start:start + self.generation.batch_size]
+        inputs = tokenizer(batch, max_length=self.generation.max_input_length,
+                          truncation=True, padding=True, return_tensors="pt")
+        if self.device:
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        outputs = model.generate(
+            **inputs, max_new_tokens=self.generation.max_new_tokens,
+            num_beams=self.generation.num_beams,
+            no_repeat_ngram_size=self.generation.no_repeat_ngram_size,
+            length_penalty=self.generation.length_penalty,
+            early_stopping=self.generation.early_stopping,
+        )
+        decoded.extend(str(x) for x in tokenizer.batch_decode(outputs, skip_special_tokens=True))
+    result = []
+    cursor = 0
+    for is_empty in empty_mask:
+        if is_empty:
+            result.append("")
+        else:
+            result.append(decoded[cursor])
+            cursor += 1
+    return result
 ```
 
-**Kết quả đúng:**
+### 🎯 Bài cuối chặng 10 — Code lại `app/summarizer.py`
 
-- `summarize("")` trả `""`.
-- `summarize_batch(["a", "", "b"])` trả 3 phần tử.
-- Log cho thấy model chỉ load một lần.
+**Yêu cầu:** Tạo file `app/summarizer.py` (138 dòng) chứa đầy đủ:
+- `GenerationConfig` dataclass (7 fields)
+- `ViT5Summarizer` class:
+  - `__init__` (model_id, base_model_id, token, device, generation)
+  - `_load_as_peft_adapter(transformers)` → `tuple | None`
+  - `_ensure_loaded()` → `(model, tokenizer)`
+  - `summarize(text)` → str
+  - `summarize_batch(texts)` → list[str]
 
-**So sánh dự án:** mở `app/summarizer.py` toàn bộ file.
-
-Checklist qua chặng:
-
-- Bạn hiểu khác nhau giữa train và inference.
-- Bạn biết lazy loading để web khởi động nhẹ hơn.
-- Bạn hiểu PEFT adapter loading flow.
-- Bạn tự code được interface giống `ViT5Summarizer`.
+**Kiểm tra:** So với `app/summarizer.py` trong dự án — phải giống 100%.
 
 ---
 
-## Chặng 10 - FastAPI Web Demo Và Tích Hợp Toàn Bộ
+## Chặng 11 — FastAPI Web Demo (`app/main.py` + `app/templates/index.html`)
 
-**Mục tiêu:** ghép crawler và summarizer thành web app: mở trang, bấm nút, crawl tin mới, tóm tắt và hiển thị kết quả.
+**Mục tiêu:** hiểu FastAPI routes, Jinja2 templates, fetch API, XSS prevention. Code lại `app/main.py` và `index.html`.
 
-### Bạn cần hiểu gì?
+### Lý thuyết
 
-- FastAPI route `GET /` trả trang HTML (dùng Jinja2 template).
-- FastAPI route `GET /healthz` dùng kiểm tra service sống.
-- FastAPI route `POST /api/summarize-today` chạy logic chính: crawl → summarize → return JSON.
-- Pydantic response model giúp API output rõ schema.
-- Jinja2 template render file HTML với biến Python: `{{ model_id }}`, `{{ max_articles }}`.
-- Frontend gọi API bằng `fetch()` mà không reload page (AJAX pattern).
-- `HTTPException` dùng để trả lỗi API rõ ràng (ví dụ 502 nếu không crawl được, 500 nếu model lỗi).
-- **XSS prevention:** `escapeHtml()` trong JavaScript thay thế `<`, `>`, `&`, `"`, `'` để tránh inject HTML/JS.
-- Environment variable giúp đổi cấu hình mà không sửa code.
-
-### File/function trong dự án
-
-- `app/main.py`
-  - `app = FastAPI(...)`: tạo app.
-  - `templates = Jinja2Templates(directory="app/templates")`: mount templates.
-  - `summarizer = ViT5Summarizer()`: tạo summarizer global (lazy load).
-  - `index()`: render trang web.
-  - `healthz()`: trả `{"status":"ok"}`.
-  - `summarize_today()`: crawl demo + summarize + return `SummarizeResponse`.
-- `app/templates/index.html`
-  - Giao diện có button "Tóm tắt tin tức hôm nay".
-  - JavaScript gọi `POST /api/summarize-today` bằng `fetch()`.
-  - `escapeHtml()` chống XSS.
-  - Render kết quả thành cards.
-- `Dockerfile`, `docker-compose.yml`
-  - Chạy app trong container.
-
-### Bài tập nhỏ 10.1 - FastAPI hello world
-
-**Yêu cầu:** tạo `practice_api.py`:
-
+**1. FastAPI app:**
 ```python
-from fastapi import FastAPI
-
-app = FastAPI()
-
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
-```
-
-Chạy:
-
-```bash
-uvicorn practice_api:app --reload
-```
-
-**Kết quả đúng:** mở `http://127.0.0.1:8000/healthz` thấy JSON.
-
-### Bài tập nhỏ 10.2 - POST API trả dữ liệu
-
-**Yêu cầu:** thêm route:
-
-```text
-POST /api/random-quote
-```
-
-Trả JSON:
-
-```json
-{"quote":"Practice makes progress.","author":"Demo"}
-```
-
-**Đáp án gợi ý:**
-
-```python
-@app.post("/api/random-quote")
-def random_quote():
-    return {"quote": "Practice makes progress.", "author": "Demo"}
-```
-
-### Bài tập nhỏ 10.3 - Jinja2 template
-
-**Yêu cầu:** render HTML từ Jinja2 template, truyền biến `app_name` và `max_items`.
-
-**Đáp án gợi ý:**
-
-```python
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+app = FastAPI(title="vn-news-summarizer", version="0.2.0-simple")
+templates = Jinja2Templates(directory="app/templates")
+summarizer = ViT5Summarizer()  # global, lazy loaded
+```
+
+**2. Routes:**
+- `GET /` → render `index.html` template
+- `GET /healthz` → `{"status": "ok", "version": "..."}`
+- `POST /api/summarize-today` → crawl RSS → summarize → JSON response
+
+**3. Jinja2 template variables:**
+```python
+templates.TemplateResponse("index.html", {
+    "request": request,  # bắt buộc
+    "model_id": summarizer.model_id,
+    "max_articles": int(os.environ.get("MAX_ARTICLES_PER_DEMO", "5")),
+})
+```
+Trong HTML: `{{ model_id }}`, `{{ max_articles }}`.
+
+**4. POST endpoint logic:**
+```python
+@app.post("/api/summarize-today", response_model=SummarizeResponse)
+async def summarize_today():
+    articles, _stats = await crawl_articles(mode="demo", limit=limit)
+    if not articles:
+        raise HTTPException(status_code=502, detail="No article could be crawled")
+    summaries = summarizer.summarize_batch([a.content_text for a in articles])
+    items = [SummaryItem(...) for a, s in zip(articles, summaries)]
+    return SummarizeResponse(date=date.today().isoformat(), total=len(items), items=items)
+```
+
+**5. XSS prevention trong `index.html`:**
+```javascript
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+```
+Mọi dữ liệu từ server (title, summary, URL) phải qua `escapeHtml()` trước khi chèn vào DOM.
+
+**6. Frontend fetch:**
+```javascript
+const response = await fetch("/api/summarize-today", { method: "POST" });
+const data = await response.json();
+if (!response.ok) throw new Error(data.detail || "Request failed");
+```
+
+### Bài tập 11.1 — FastAPI routes
+
+**Yêu cầu:** Viết 3 routes: `GET /`, `GET /healthz`, `POST /api/summarize-today`.
+
+**Đáp án:**
+
+```python
+from __future__ import annotations
+import os
+from datetime import date
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from app.crawler import crawl_articles
+from app.schemas import HealthResponse, SummarizeResponse, SummaryItem
+from app.summarizer import ViT5Summarizer
+
+APP_VERSION = "0.2.0-simple"
+app = FastAPI(title="vn-news-summarizer", version=APP_VERSION,
+              description="Vietnamese news summarization demo using RSS crawl + fine-tuned ViT5.")
+templates = Jinja2Templates(directory="app/templates")
+summarizer = ViT5Summarizer()
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "app_name": "My App", "max_items": 5},
-    )
+    return templates.TemplateResponse("index.html", {
+        "request": request,
+        "model_id": summarizer.model_id,
+        "max_articles": int(os.environ.get("MAX_ARTICLES_PER_DEMO", "5")),
+    })
+
+@app.get("/healthz", response_model=HealthResponse)
+async def healthz():
+    return HealthResponse(status="ok", version=APP_VERSION)
+
+@app.post("/api/summarize-today", response_model=SummarizeResponse)
+async def summarize_today():
+    limit = int(os.environ.get("MAX_ARTICLES_PER_DEMO", "5"))
+    articles, _stats = await crawl_articles(mode="demo", limit=limit)
+    if not articles:
+        raise HTTPException(status_code=502, detail="No article could be crawled and extracted.")
+    try:
+        summaries = summarizer.summarize_batch([a.content_text for a in articles])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Model inference failed: {exc}") from exc
+    items = [
+        SummaryItem(title=a.title, source=a.source_name, url=a.url,
+                    published_at=a.published_at, summary=s)
+        for a, s in zip(articles, summaries, strict=True)
+    ]
+    return SummarizeResponse(date=date.today().isoformat(), total=len(items), items=items)
 ```
 
-`templates/index.html`:
+### Bài tập 11.2 — escapeHtml + fetch
 
-```html
-<h1>{{ app_name }}</h1>
-<p>Max items: {{ max_items }}</p>
-```
+**Yêu cầu:** Viết JavaScript cho nút "Tóm tắt tin tức hôm nay" với XSS escaping.
 
-### Bài tập nhỏ 10.4 - HTML có button gọi API bằng fetch()
+**Đáp án:**
 
-**Yêu cầu:** tạo HTML có button, bấm button gọi `/api/random-quote` bằng `fetch()` và render kết quả.
-
-**Đáp án gợi ý phần JS:**
-
-```html
-<button id="btn" type="button">Get Quote</button>
-<div id="result"></div>
-<script>
+```javascript
 function escapeHtml(value) {
     return String(value)
         .replaceAll("&", "&amp;")
@@ -2754,417 +1935,129 @@ function escapeHtml(value) {
         .replaceAll("'", "&#039;");
 }
 
-document.getElementById("btn").addEventListener("click", async () => {
-    const result = document.getElementById("result");
-    result.textContent = "Loading...";
+button.addEventListener("click", async () => {
+    button.disabled = true;
+    statusEl.textContent = "Đang crawl và tóm tắt...";
+    resultsEl.innerHTML = "";
     try {
-        const response = await fetch("/api/random-quote", { method: "POST" });
-        if (!response.ok) throw new Error("API error");
+        const response = await fetch("/api/summarize-today", { method: "POST" });
         const data = await response.json();
-        result.innerHTML = `<p>${escapeHtml(data.quote)} — ${escapeHtml(data.author)}</p>`;
+        if (!response.ok) throw new Error(data.detail || "Request failed");
+        statusEl.textContent = `Đã tóm tắt ${data.total} bài ngày ${data.date}.`;
+        resultsEl.innerHTML = data.items.map((item) => `
+            <article class="item">
+                <h2>${escapeHtml(item.title)}</h2>
+                <p class="meta">${escapeHtml(item.source)}${item.published_at ? " - " + escapeHtml(item.published_at) : ""}</p>
+                <p>${escapeHtml(item.summary)}</p>
+                <p class="meta">Tóm tắt bởi mô hình AI, có thể chưa chính xác.</p>
+                <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer nofollow">Đọc bài gốc</a>
+            </article>
+        `).join("");
     } catch (error) {
-        result.textContent = "Lỗi: " + error.message;
+        statusEl.textContent = `Lỗi: ${error.message}`;
+    } finally {
+        button.disabled = false;
     }
 });
-</script>
 ```
 
-**Liên hệ dự án:** mở `app/templates/index.html`. Logic JavaScript tương tự: button → fetch POST → render items.
+### 🎯 Bài cuối chặng 11 — Code lại `app/main.py` + `app/templates/index.html`
 
-### Bài tập nhỏ 10.5 - Dùng Pydantic response model
+**Yêu cầu:**
+1. Tạo `app/main.py` (66 dòng): 3 routes, global summarizer, APP_VERSION.
+2. Tạo `app/templates/index.html` (140 dòng): HTML + CSS + JavaScript với:
+   - CSS variables (--bg, --panel, --text, --muted, --line, --accent, --accent-dark)
+   - Responsive layout (`@media max-width 720px`)
+   - Nút "Tóm tắt tin tức hôm nay"
+   - `escapeHtml` function
+   - `fetch("/api/summarize-today")` + render results
+   - Jinja2 placeholders: `{{ model_id }}`, `{{ max_articles }}`
 
-**Yêu cầu:** tạo Pydantic model `QuoteResponse` và khai báo `response_model=QuoteResponse`.
-
-**Đáp án gợi ý:**
-
-```python
-from pydantic import BaseModel
-
-class QuoteResponse(BaseModel):
-    quote: str
-    author: str
-
-@app.post("/api/random-quote", response_model=QuoteResponse)
-def random_quote():
-    return QuoteResponse(quote="Practice makes progress.", author="Demo")
-```
-
-### Bài tập nhỏ 10.6 - HTTPException
-
-**Yêu cầu:** nếu không có dữ liệu, trả lỗi 500 thay vì crash.
-
-**Đáp án gợi ý:**
-
-```python
-from fastapi import HTTPException
-
-@app.post("/api/data")
-def get_data():
-    data = []  # Giả sử không có dữ liệu
-    if not data:
-        raise HTTPException(status_code=502, detail="No data available")
-    return {"items": data}
-```
-
-**Liên hệ dự án:** mở `app/main.py` dòng 49 và 54. Dự án raise `HTTPException(502)` khi không crawl được và `HTTPException(500)` khi model lỗi.
-
-### Bài cuối chặng 10 - Code lại web demo mini giống dự án
-
-**Bối cảnh:** đây là bản nhỏ của `app/main.py` và `app/templates/index.html`.
-
-**Thư mục tự tạo:** `quote_app/`.
-
-**Cấu trúc cần có:**
-
-```text
-quote_app/
-├── __init__.py
-├── main.py
-├── quotes.jsonl
-└── templates/index.html
-```
-
-**Yêu cầu cụ thể:**
-
-1. `quotes.jsonl` có ít nhất 5 dòng, mỗi dòng:
-
-```json
-{"quote":"...","author":"..."}
-```
-
-2. `main.py`:
-   - Tạo FastAPI app.
-   - Mount Jinja2 templates.
-   - `GET /` trả HTML, truyền `app_name` vào template.
-   - `GET /healthz` trả `{"status":"ok","version":"0.1.0"}`.
-   - `POST /api/random-quote` đọc quote ngẫu nhiên từ JSONL và trả `QuoteResponse`.
-   - Nếu file rỗng hoặc lỗi, raise `HTTPException(status_code=500, detail="...")`.
-3. `index.html`:
-   - Hiển thị `{{ app_name }}`.
-   - Có button.
-   - Có vùng result.
-   - Bấm button gọi API, không reload page.
-   - Escape HTML output.
-   - Nếu API lỗi, hiển thị message lỗi.
-4. Chạy:
-
-```bash
-uvicorn quote_app.main:app --reload
-```
-
-**Kết quả đúng:**
-
-- Mở browser thấy trang có button.
-- Bấm button thấy quote hiện ra.
-- `/healthz` trả JSON ok.
-- API lỗi không làm browser trắng trang.
-
-**Liên hệ dự án thật:** sau bài này, thay `random quote` bằng:
-
-- `crawl_articles(mode="demo", limit=MAX_ARTICLES_PER_DEMO)`.
-- `ViT5Summarizer.summarize_batch(content_texts)`.
-- Trả list `SummaryItem` cho frontend.
-
-**So sánh dự án:** mở `app/main.py` và `app/templates/index.html`.
-
-Checklist qua chặng:
-
-- Bạn tự viết được FastAPI route cơ bản.
-- Bạn biết render Jinja2 template với biến.
-- Bạn biết frontend gọi POST API bằng `fetch()`.
-- Bạn hiểu `escapeHtml()` dùng để chống XSS.
-- Bạn hiểu luồng `button → API → crawler → model → response → render`.
+**Kiểm tra:** So với `app/main.py` và `app/templates/index.html` trong dự án — phải giống 100%.
 
 ---
 
-## Chặng 11 - Test, Debug, Docker Và Chạy Dự Án Như Một Sản Phẩm
+## Tổng Kết — Thứ Tự Code Lại Dự Án Hoàn Chỉnh
 
-**Mục tiêu:** biết kiểm tra dự án chạy đúng, debug lỗi phổ biến, và giải thích project khi đưa vào CV/phỏng vấn.
+Sau khi hoàn thành tất cả chặng, bạn code lại dự án theo thứ tự:
 
-### Bạn cần hiểu gì?
+| Bước | File | Chặng |
+|------|------|-------|
+| 1 | `app/__init__.py` | (rỗng) |
+| 2 | `labeling/__init__.py` | (rỗng) |
+| 3 | `app/schemas.py` | 1 |
+| 4 | `app/sources.py` | 2 |
+| 5 | `labeling/prompt.py` | 3 |
+| 6 | `labeling/qc.py` | 4 |
+| 7 | `labeling/gemini_labeler.py` | 5 |
+| 8 | `labeling/label_dataset.py` | 6 |
+| 9 | `labeling/split_dataset.py` | 7 |
+| 10 | `app/crawler.py` | 8+9 |
+| 11 | `app/summarizer.py` | 10 |
+| 12 | `app/main.py` | 11 |
+| 13 | `app/templates/index.html` | 11 |
+| 14 | `requirements.txt` | copy |
+| 15 | `pyproject.toml` | copy |
+| 16 | `.env.example` | copy |
+| 17 | `Makefile` | copy |
+| 18 | `README.md` | copy |
+| 19 | `Dockerfile` + `docker-compose.yml` | copy |
 
-- **Unit test** kiểm tra function nhỏ, ví dụ `canonicalize_url()`, `parse_label_json()`.
-- **Integration test** kiểm tra cả pipeline nhỏ, ví dụ JSONL input → split output.
-- **pytest** là test runner phổ biến. Chạy bằng `python -m pytest`.
-- `.gitignore` có thể làm file data không hiện trong Git, nhưng file vẫn tồn tại trên máy.
-- Lỗi path Windows/Linux thường do dùng `\` và `/` lẫn lộn; `Path` giúp giảm lỗi.
-- Lỗi encoding thường do đọc/ghi không dùng UTF-8.
-- Docker image là gói app; container là app đang chạy từ image.
-- `.env` chứa cấu hình như `HF_MODEL_ID`, `GEMINI_API_KEYS`, limit demo.
-- Dự án cấu hình test trong `pyproject.toml`: `testpaths = ["tests_simple"]`, `pythonpath = ["."]`.
+**Tiêu chí hoàn thành:** Chạy được:
+```bash
+# Crawl
+python -m app.crawler --mode labeling --source vnexpress --limit 5 --output data/raw/test.jsonl
 
-### File trong dự án
+# Label (cần GEMINI_API_KEYS)
+python -m labeling.label_dataset --input data/raw/test.jsonl --output data/labeled/test.jsonl --limit 3
 
-- `pyproject.toml` → `[tool.pytest.ini_options]`: cấu hình pytest.
-- `.gitignore`: bỏ qua data/model local.
-- `README.md`: hướng dẫn chạy dự án.
-- `Dockerfile`, `docker-compose.yml`: chạy FastAPI bằng Docker.
+# Split
+python -m labeling.split_dataset --input data/labeled/test.jsonl --output data/datasets/test
 
-### Bài tập nhỏ 11.1 - Test canonical URL
-
-**Yêu cầu:** viết test chứng minh `utm_source` bị bỏ.
-
-**Đáp án gợi ý:**
-
-```python
-def test_canonicalize_url_removes_tracking():
-    url = "https://a.com/news?id=1&utm_source=fb#top"
-    assert canonicalize_url(url) == "https://a.com/news?id=1"
+# Web demo
+uvicorn app.main:app --reload
 ```
 
-### Bài tập nhỏ 11.2 - Test parser confidence
+---
 
-**Yêu cầu:** test `confidence=8` thành `1.0`.
+## Lịch Học Gợi Ý (8 tuần)
 
-**Đáp án gợi ý:**
+| Tuần | Chặng | Nội dung |
+|------|-------|----------|
+| 1 | 0-1 | Python nền tảng + schemas |
+| 2 | 2-3 | Sources config + Prompt/Parser |
+| 3 | 4 | QC rules (regex, fuzzy matching) |
+| 4 | 5-6 | AI Studio labeler + label pipeline |
+| 5 | 7 | Split dataset |
+| 6 | 8-9 | Crawler (URL, SimHash, HTTP, RSS, extract) |
+| 7 | 10 | ViT5 Summarizer (PEFT, tokenizer, batch) |
+| 8 | 11 | FastAPI + HTML + tổng kết code lại dự án |
 
-```python
-def test_parse_label_json_clamps_confidence():
-    parsed = parse_label_json('{"summary":"abc", "confidence": 8}')
-    assert parsed.confidence == 1.0
-```
+---
 
-### Bài tập nhỏ 11.3 - Test split output files
-
-**Yêu cầu:** tạo 10 row fake, gọi function split, kiểm tra 3 file tồn tại và tổng dòng đúng.
-
-**Đáp án gợi ý:**
-
-```python
-def test_export_splits_creates_files(tmp_path):
-    rows = [
-        {
-            "article_id": i,
-            "source": "demo",
-            "url": f"https://example.com/{i}",
-            "title": f"Title {i}",
-            "content_text": "Some content text here",
-            "summary": "Some summary here",
-            "prompt_version": "v1",
-            "qc_passed": True,
-        }
-        for i in range(10)
-    ]
-    # Write input
-    input_path = tmp_path / "labeled.jsonl"
-    write_jsonl(input_path, rows)
-    # Export
-    counts = export_splits(input_path, tmp_path / "output")
-    assert (tmp_path / "output" / "train.jsonl").exists()
-    assert (tmp_path / "output" / "val.jsonl").exists()
-    assert (tmp_path / "output" / "test.jsonl").exists()
-    assert sum(counts.values()) == 10
-```
-
-### Bài tập nhỏ 11.4 - Debug file bị ignore
-
-**Yêu cầu:** tạo `data/raw/test.jsonl`, chạy `git status`, giải thích vì sao không thấy file nếu `.gitignore` đang ignore `data/`.
-
-**Kết quả đúng:** bạn hiểu file vẫn tồn tại trên máy, chỉ là Git không track.
-
-### Bài tập nhỏ 11.5 - Docker command cơ bản
-
-**Yêu cầu:** chạy:
+## Command Thực Tế Nên Nhớ
 
 ```bash
-docker compose up --build
-```
+# Setup
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+pip install -r requirements.txt
+cp .env.example .env
 
-Sau đó mở:
+# Crawl
+python -m app.crawler --mode labeling --output data/raw/articles.jsonl
+python -m app.crawler --mode labeling --source vnexpress --limit 10 --output data/raw/test.jsonl --verbose
 
-```text
-http://localhost:8000/healthz
-```
-
-**Kết quả đúng:** thấy `{"status":"ok"}` nếu env/model không chặn app khởi động.
-
-### Bài cuối chặng 11 - Viết test và checklist chạy dự án thật
-
-**Bối cảnh:** sau khi code được dự án, bạn cần chứng minh nó chạy đúng và biết giải thích khi có lỗi.
-
-**Yêu cầu cụ thể:**
-
-1. Tạo hoặc cập nhật test cho 3 nhóm:
-   - URL tools: `canonicalize_url`, `url_hash`.
-   - Label parser: JSON hợp lệ, confidence clamp, refusal.
-   - Split dataset: input fake → output train/val/test.
-2. Tạo file ghi chú `docs/run_checklist.md` hoặc ghi vào notebook cá nhân:
-   - Cách tạo env.
-   - Cách crawl thử 10 bài.
-   - Cách label (AI Studio key + fake LLM).
-   - Cách split dataset.
-   - Cách chạy notebook.
-   - Cách chạy web.
-   - Cách chạy Docker.
-3. Chạy các command thật:
-
-```bash
-# Crawl thử
-python -m app.crawler --mode labeling --source vnexpress --limit 10 --output data/raw/articles.jsonl --verbose
-
-# Label (cần GEMINI_API_KEYS hoặc dùng fake LLM)
-python -m labeling.label_dataset --input data/raw/articles.jsonl --output data/labeled/labeled_articles.jsonl --limit 3
+# Label (AI Studio)
+export GEMINI_API_KEYS=key1,key2,key3
+python -m labeling.label_dataset --input data/raw/articles.jsonl --output data/labeled/labeled_articles.jsonl --concurrency 5
 
 # Split
 python -m labeling.split_dataset --input data/labeled/labeled_articles.jsonl --output data/datasets/v2
 
 # Web demo
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Test (nếu có tests_simple/)
-python -m pytest
-```
-
-4. Với mỗi command, ghi lại:
-   - Command.
-   - Kết quả đúng mong đợi.
-   - Lỗi thường gặp.
-   - Cách xử lý.
-
-**Kết quả đúng:**
-
-- Bạn biết command nào dùng cho crawl labeling, command nào dùng cho web demo.
-- Bạn biết file data bị `.gitignore` vẫn có thể mở trong máy.
-- Bạn biết live crawl không thể tái tạo y hệt report lịch sử.
-- Bạn có thể trình bày project trong 3-5 phút.
-
-Checklist qua chặng:
-
-- Bạn viết được test đơn giản cho pure function.
-- Bạn biết chạy FastAPI và Docker.
-- Bạn có checklist để tự debug thay vì chỉ nhìn terminal đứng im.
-
----
-
-## Lịch Học Gợi Ý 8 Tuần
-
-| Tuần | Chặng | Kết quả cần đạt |
-|---|---:|---|
-| Tuần 1 | 0-1 | Code lại helper JSONL, schema, source config. Hiểu env var, package. |
-| Tuần 2 | 2-3 | Code RSS fetch, canonical URL, hash, rate limiter, robots. Hiểu async cơ bản. |
-| Tuần 3 | 4-5 | Code extractor (trafilatura + fallback), SimHash, mini crawler xuất JSONL. |
-| Tuần 4 | 6 | Code prompt/parser/fake labeling pipeline. Hiểu AI Studio, key rotation, model fallback. |
-| Tuần 5 | 7 | Code QC (fuzzy matching, number/entity check) và split train/val/test. |
-| Tuần 6 | 8 | Chạy notebook mini fine-tune flow, hiểu ViT5 + LoRA + ROUGE. |
-| Tuần 7 | 9 | Code inference class, hiểu lazy loading, PEFT adapter loading, batch summarize. |
-| Tuần 8 | 10-11 | Code FastAPI web demo, Docker, tests, checklist chạy dự án. |
-
-Nếu mỗi ngày chỉ có 1-2 giờ, có thể chia mỗi chặng thành 3 buổi:
-
-1. Buổi 1: đọc lý thuyết và làm bài nhỏ.
-2. Buổi 2: làm bài cuối chặng.
-3. Buổi 3: so sánh với code dự án và viết ghi chú phỏng vấn.
-
-## Thứ Tự Code Lại Dự Án Thật
-
-Sau khi làm xong bài tập practice, bạn có thể tự code lại repo theo thứ tự này:
-
-1. `app/schemas.py` — kiểu dữ liệu dùng chung.
-2. `app/sources.py` — cấu hình nguồn báo.
-3. Các helper JSONL trong `labeling/label_dataset.py`, `labeling/split_dataset.py`.
-4. `app/crawler.py` phần URL tools: `canonicalize_url`, `url_hash`.
-5. `app/crawler.py` phần RSS: `fetch_feed`, `_to_utc`, `_category_from_url`.
-6. `app/crawler.py` phần extract: `normalize_text`, `word_count`, `extract_from_html`.
-7. `app/crawler.py` phần dedupe: `simhash64`, `hamming`.
-8. `app/crawler.py` phần pipeline: `crawl_articles`, `write_jsonl`, CLI.
-9. `labeling/prompt.py` — prompt, template, parser.
-10. `labeling/gemini_labeler.py` — AI Studio client, key rotation, model fallback.
-11. `labeling/vertex_labeler.py` — legacy Vertex AI client (nếu cần).
-12. `labeling/label_dataset.py` — pipeline label nhiều bài async.
-13. `labeling/qc.py` — QC checks (word count, sentence count, number faithfulness, entity faithfulness + fuzzy).
-14. `labeling/split_dataset.py` — split deterministic.
-15. `notebooks/finetune_vit5_lora.ipynb` — fine-tune flow.
-16. `app/summarizer.py` — inference class, lazy load, PEFT adapter, batch summarize.
-17. `app/main.py` — FastAPI routes, integrate crawler + summarizer.
-18. `app/templates/index.html` — frontend, fetch API, escapeHtml.
-19. `Dockerfile`, `docker-compose.yml` — containerize.
-
-## Acceptance Criteria Cuối Lộ Trình
-
-Bạn hoàn thành lộ trình khi tự làm được các việc sau mà không cần copy code:
-
-- Tự code crawler tạo được `data/raw/articles.jsonl`.
-- Tự giải thích được vì sao crawler dùng RSS-first, canonical URL, robots/rate limit, dedupe (URL + SimHash).
-- Tự code labeling pipeline dùng AI Studio (GeminiLabeler) hoặc fake LLM.
-- Tự giải thích được key rotation, model fallback, asyncio.to_thread, Semaphore.
-- Tự giải thích được prompt version `1.2.0` và vì sao report labeling là artifact lịch sử.
-- Tự code QC và split dataset ra `train.jsonl`, `val.jsonl`, `test.jsonl`.
-- Tự chạy và giải thích notebook fine-tune ViT5 + LoRA.
-- Tự load model bằng `ViT5Summarizer` hoặc class tương tự và summarize text mới.
-- Tự chạy web demo tại `http://localhost:8000`.
-- Tự chạy Docker bằng `docker compose up --build`.
-- Tự trả lời trong phỏng vấn:
-  - Vì sao dùng Gemini (AI Studio) để gán nhãn? Vì sao key rotation?
-  - Vì sao dùng ViT5 cho tiếng Việt?
-  - Vì sao dùng LoRA thay vì full fine-tune?
-  - Vì sao dùng JSONL thay database?
-  - Vì sao live crawl hôm nay không thể tạo lại y hệt dataset/report lịch sử?
-  - SimHash dùng để làm gì? Hamming distance là gì?
-  - asyncio.Semaphore, asyncio.to_thread, asyncio.gather dùng ở đâu trong dự án?
-
-## Cách Tự Ghi Chú Sau Mỗi Chặng
-
-Sau mỗi chặng, tạo một file ghi chú cá nhân, ví dụ `notes/chang_03.md`, trả lời 5 câu:
-
-1. Chặng này học kỹ thuật gì?
-2. Function quan trọng nhất là gì?
-3. Input/output của function đó là gì?
-4. Lỗi mình gặp là gì và sửa ra sao?
-5. Nếu nhà tuyển dụng hỏi, mình giải thích trong 3 câu như thế nào?
-
-Ví dụ trả lời ngắn cho chặng crawler:
-
-```text
-Chặng này học RSS crawler. Function quan trọng là fetch_feed(): input RSS URL, output list ArticleCandidate. Em dùng RSS để lấy danh sách bài trước, sau đó mới fetch HTML từng URL. Khi một nguồn lỗi, crawler bỏ qua nguồn đó và tiếp tục nguồn khác để pipeline không crash.
-```
-
-## Command Thực Tế Nên Nhớ
-
-Crawl thử ít bài:
-
-```bash
-python -m app.crawler --mode labeling --source vnexpress --limit 10 --output data/raw/articles.jsonl --verbose
-```
-
-Label dataset (AI Studio - mặc định):
-
-```bash
-export GEMINI_API_KEYS=key1,key2,key3
-python -m labeling.label_dataset --input data/raw/articles.jsonl --output data/labeled/labeled_articles.jsonl --concurrency 5
-```
-
-Label dataset (Vertex AI - legacy):
-
-```bash
-python -m labeling.label_dataset --input data/raw/articles.jsonl --output data/labeled/labeled_articles.jsonl --backend vertex
-```
-
-Split dataset:
-
-```bash
-python -m labeling.split_dataset --input data/labeled/labeled_articles.jsonl --output data/datasets/v2
-```
-
-Chạy web:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-Chạy Docker:
-
-```bash
-docker compose up --build
-```
-
-Chạy test:
-
-```bash
-python -m pytest
-```
-
-Chạy lint:
-
-```bash
+# Lint
 ruff check app/ labeling/
 ```

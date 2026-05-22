@@ -5,7 +5,7 @@ PIP ?= pip
 
 help:
 	@echo "setup          Install dependencies from requirements.txt"
-	@echo "crawl-labeling Crawl articles for Vertex labeling into data/raw/articles.jsonl"
+	@echo "crawl-labeling Crawl articles for labeling into data/raw/articles.jsonl"
 	@echo "label          Label crawled articles with Gemini (AI Studio by default)"
 	@echo "split          Export QC-passed labels to data/datasets/v2"
 	@echo "api            Run FastAPI demo on http://localhost:8000"

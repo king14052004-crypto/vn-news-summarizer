@@ -19,7 +19,7 @@ The exact historical reports are preserved in:
 
 Key numbers:
 
-- Prompt `1.2.0`, Vertex `gemini-2.5-pro`, concurrency 5.
+- Prompt `1.2.0`, `gemini-2.5-pro`, concurrency 5.
 - 2412 labeled articles, 2070 QC-passed labels.
 - Dataset v2: 1636 train / 218 val / 216 test.
 - ViT5-base + LoRA test metrics: ROUGE-1 0.6055, ROUGE-2 0.3106,
@@ -41,7 +41,6 @@ vn-news-summarizer/
 â”‚   â””â”€â”€ templates/index.html
 â”œâ”€â”€ labeling/
 â"‚   â"œâ"€â"€ gemini_labeler.py         # AI Studio Gemini (free keys + rotation)
-â”‚   â”œâ”€â”€ vertex_labeler.py        # Vertex Gemini wrapper (legacy, paid)
 â”‚   â”œâ”€â”€ prompt.py                # Prompt v1.2.0 + robust JSON parser
 â”‚   â”œâ”€â”€ qc.py                    # Deterministic QC checks
 â”‚   â”œâ”€â”€ label_dataset.py         # raw articles JSONL -> labeled JSONL
@@ -93,7 +92,7 @@ Crawl articles for labeling:
 python -m app.crawler --mode labeling --output data/raw/articles.jsonl
 ```
 
-Label with Gemini via AI Studio (free, default):
+Label with Gemini via AI Studio (free):
 
 ```bash
 # Set one or more free API keys (get them at https://aistudio.google.com/apikey)
@@ -107,16 +106,6 @@ python -m labeling.label_dataset \
 
 Multiple keys are rotated automatically when one hits the rate limit.
 Model fallback order: `gemini-2.5-flash` → `gemini-2.0-flash`.
-
-To use the legacy Vertex AI backend instead:
-
-```bash
-python -m labeling.label_dataset \
-  --input data/raw/articles.jsonl \
-  --output data/labeled/labeled_articles.jsonl \
-  --concurrency 5 \
-  --backend vertex
-```
 
 Export train/val/test splits:
 

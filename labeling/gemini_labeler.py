@@ -1,7 +1,6 @@
 """Google AI Studio (Gemini) client with multi-key rotation for labeling.
 
-Replaces the Vertex AI backend so that labeling can run on free AI Studio
-API keys instead of a paid GCP project.  Multiple keys can be supplied
+Labeling runs on free AI Studio API keys.  Multiple keys can be supplied
 (comma-separated in the env-var or passed as a list) so that when one key
 hits a rate / quota limit the next key is tried automatically.
 

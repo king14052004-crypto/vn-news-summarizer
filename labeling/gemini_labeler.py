@@ -40,46 +40,14 @@ class GeminiTransientError(RuntimeError):
 OverrideFn = Callable[[str, str], str]
 
 
-class _KeyRing:
-    """Thread-safe round-robin key pool with exhaustion tracking."""
-
-    def __init__(self, keys: list[str]) -> None:
-        if not keys:
-            raise GeminiLLMError("No API keys provided for AI Studio labeling")
-        self._keys = list(keys)
-        self._idx = 0
-        self._exhausted: set[int] = set()
-        self._lock = threading.Lock()
-
-    @property
-    def total(self) -> int:
-        return len(self._keys)
-
-    def current(self) -> str:
-        with self._lock:
-            return self._keys[self._idx]
-
-    def mark_exhausted(self) -> str | None:
-        """Mark the current key as exhausted and rotate. Return the next
-        usable key, or *None* if every key is exhausted."""
-        with self._lock:
-            self._exhausted.add(self._idx)
-            for offset in range(1, len(self._keys) + 1):
-                candidate = (self._idx + offset) % len(self._keys)
-                if candidate not in self._exhausted:
-                    self._idx = candidate
-                    log.info("Rotated to API key #%d/%d", candidate + 1, len(self._keys))
-                    return self._keys[candidate]
-            return None
-
-    def reset(self) -> None:
-        with self._lock:
-            self._exhausted.clear()
-            self._idx = 0
-
-
 class GeminiLabeler:
-    """AI Studio labeler with key rotation and model fallback."""
+    """AI Studio labeler with key rotation and model fallback.
+
+    Each call to :meth:`generate` iterates over a **local copy** of the key
+    list so that concurrent threads (via ``asyncio.to_thread``) never share
+    mutable rotation state.  This avoids race conditions where one thread's
+    quota error cascades into marking other threads' keys as exhausted.
+    """
 
     def __init__(
         self,
@@ -90,18 +58,22 @@ class GeminiLabeler:
         override_callable: OverrideFn | None = None,
     ) -> None:
         raw_keys = api_keys or _keys_from_env()
-        self._keyring = _KeyRing(raw_keys)
+        if not raw_keys:
+            raise GeminiLLMError("No API keys provided for AI Studio labeling")
+        self._keys: list[str] = list(raw_keys)
         self._model_chain = model_chain or list(DEFAULT_MODEL_CHAIN)
         self.params = params or GenerationParams()
         self._override = override_callable
         self._clients: dict[str, Any] = {}
+        self._clients_lock = threading.Lock()
 
     def _get_client(self, api_key: str) -> Any:
-        if api_key not in self._clients:
-            from google import genai
+        with self._clients_lock:
+            if api_key not in self._clients:
+                from google import genai
 
-            self._clients[api_key] = genai.Client(api_key=api_key)
-        return self._clients[api_key]
+                self._clients[api_key] = genai.Client(api_key=api_key)
+            return self._clients[api_key]
 
     @retry(
         reraise=True,
@@ -110,16 +82,23 @@ class GeminiLabeler:
         stop=stop_after_attempt(6),
     )
     def generate(self, *, system: str, user: str) -> str:
+        """Generate a label using AI Studio.
+
+        Key rotation and model fallback are handled per-call using local
+        iteration over snapshot copies of keys and models.  This is safe
+        for concurrent use from multiple threads.
+        """
         if self._override is not None:
             return self._override(system, user)
 
         from google.genai import types
 
+        keys = list(self._keys)
+        models = list(self._model_chain)
         last_exc: Exception | None = None
-        for model_name in self._model_chain:
-            self._keyring.reset()
-            while True:
-                api_key = self._keyring.current()
+
+        for model_name in models:
+            for key_idx, api_key in enumerate(keys):
                 client = self._get_client(api_key)
                 try:
                     response = client.models.generate_content(
@@ -138,6 +117,8 @@ class GeminiLabeler:
                             f"empty/blocked response from {model_name}"
                         )
                     return str(text)
+                except GeminiLLMError:
+                    raise
                 except Exception as exc:
                     err = str(exc).lower()
                     is_quota = any(
@@ -164,16 +145,14 @@ class GeminiLabeler:
                     )
                     if is_quota:
                         log.warning(
-                            "Key #%d quota hit on %s: %s",
-                            self._keyring._idx + 1,
+                            "Key #%d/%d quota hit on %s: %s",
+                            key_idx + 1,
+                            len(keys),
                             model_name,
                             exc,
                         )
-                        next_key = self._keyring.mark_exhausted()
-                        if next_key is not None:
-                            continue
                         last_exc = exc
-                        break
+                        continue
                     if is_transient:
                         raise GeminiTransientError(str(exc)) from exc
                     if "not found" in err or "does not exist" in err or "invalid" in err:
@@ -181,6 +160,10 @@ class GeminiLabeler:
                         last_exc = exc
                         break
                     raise GeminiLLMError(str(exc)) from exc
+            else:
+                last_exc = last_exc or RuntimeError(f"All keys exhausted for {model_name}")
+                continue
+            continue
 
         raise GeminiLLMError(
             f"All models/keys exhausted. Last error: {last_exc}"

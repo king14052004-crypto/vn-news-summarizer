@@ -18,6 +18,7 @@ Tài liệu này dành cho người mới học. Mục tiêu: hiểu từng mả
 | `labeling/qc.py` | 153 | 4 |
 | `labeling/gemini_labeler.py` | 182 | 5 |
 | `labeling/label_dataset.py` | 133 | 6 |
+| `labeling/batch_labeler.py` | 260 | 6B |
 | `labeling/split_dataset.py` | 100 | 7 |
 | `app/crawler.py` | 514 | 8-9 |
 | `app/summarizer.py` | 138 | 10 |
@@ -1673,6 +1674,296 @@ async def _label_one(row, *, labeler, semaphore):
 
 ---
 
+## Chặng 6B — Batch Labeling với Rate Limit (`labeling/batch_labeler.py`)
+
+**Mục tiêu:** hiểu rate limiting, key rotation, resumable processing, ước tính tài nguyên. Code lại `labeling/batch_labeler.py`.
+
+### Lý thuyết
+
+**1. Tại sao cần batch labeling?**
+Chặng 6 dùng `asyncio.gather` gọi đồng thời — hoạt động tốt với vài trăm bài và key trả phí. Nhưng free-tier AI Studio có giới hạn:
+- **RPM** (Requests Per Minute): tối đa 15 req/phút cho `gemini-3.1-flash-lite`.
+- **RPD** (Requests Per Day): tối đa 500 req/ngày **per project**.
+- Rate limit tính per project, không per API key. Mỗi key từ project khác = quota riêng.
+
+Với 2810 bài, nếu gọi không kiểm soát → bị block ngay. Cần batch labeler thông minh.
+
+**2. Chiến lược:**
+- **Delay giữa requests:** `60 / RPM = 4 giây` → đảm bảo không vượt 15 RPM.
+- **Key rotation round-robin:** phân bổ đều requests qua các key (project khác nhau).
+- **Daily budget tracking:** mỗi key tối đa 450 req/ngày (safe margin < 500 RPD).
+- **Resumable:** ghi kết quả từng dòng, restart tự skip bài đã xong.
+
+**3. Ước tính tài nguyên:**
+```
+Dataset: 2810 bài
+Model: gemini-3.1-flash-lite (15 RPM, 500 RPD/project)
+Nếu 9 keys: 9 × 450 = 4,050 req/ngày → label hết trong 1 ngày
+Thời gian chạy: 2810 × 4.5s delay ≈ 3.5 giờ
+```
+
+**4. `dataclass` cho config:**
+```python
+@dataclass(slots=True)
+class BatchConfig:
+    batch_size: int = 50
+    delay_between_requests: float = 4.5
+    max_per_key_per_day: int = 450
+```
+
+**5. Incremental write (append mode):**
+```python
+# Ghi từng row ngay khi xong — không mất dữ liệu nếu crash
+with path.open("a", encoding="utf-8") as fh:  # "a" = append
+    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+```
+
+### Bài tập 6B.1 — KeyUsageTracker
+
+**Bối cảnh:** Mỗi key có budget 450 req/ngày. Cần track đã dùng bao nhiêu và tìm key còn quota.
+
+**Yêu cầu:**
+1. Tạo `KeyUsageTracker` dataclass với:
+   - `daily_counts: dict[str, int]` — đếm số lần dùng mỗi key (key=index dạng str).
+   - `budget_per_key: int = 450`.
+2. Method `can_use(key_index: int) -> bool`: True nếu chưa vượt budget.
+3. Method `record_use(key_index: int)`: tăng count.
+4. Method `get_next_available(total_keys, start) -> int | None`: round-robin tìm key còn quota.
+5. Method `total_remaining(total_keys) -> int`: tổng capacity còn lại.
+6. Test: 3 keys, budget=2, dùng hết key 0 → `get_next_available` trả key 1.
+
+**Đáp án:**
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class KeyUsageTracker:
+    daily_counts: dict[str, int] = field(default_factory=dict)
+    budget_per_key: int = 450
+
+    def can_use(self, key_index: int) -> bool:
+        return self.daily_counts.get(str(key_index), 0) < self.budget_per_key
+
+    def record_use(self, key_index: int) -> None:
+        k = str(key_index)
+        self.daily_counts[k] = self.daily_counts.get(k, 0) + 1
+
+    def get_next_available(self, total_keys: int, start: int = 0) -> int | None:
+        for offset in range(total_keys):
+            idx = (start + offset) % total_keys
+            if self.can_use(idx):
+                return idx
+        return None
+
+    def total_remaining(self, total_keys: int) -> int:
+        return sum(
+            self.budget_per_key - self.daily_counts.get(str(i), 0)
+            for i in range(total_keys)
+        )
+
+# Test
+tracker = KeyUsageTracker(budget_per_key=2)
+tracker.record_use(0)
+tracker.record_use(0)
+assert not tracker.can_use(0)  # key 0 đã hết budget
+assert tracker.can_use(1)      # key 1 còn
+assert tracker.get_next_available(3, start=0) == 1  # skip key 0, trả key 1
+assert tracker.total_remaining(3) == 4  # key1: 2 + key2: 2 = 4
+print("OK!")
+```
+
+### Bài tập 6B.2 — Resume: load existing article_ids
+
+**Bối cảnh:** Nếu script crash giữa chừng (mất mạng, Ctrl+C), khi chạy lại cần skip bài đã label. Đọc output JSONL lấy tất cả `article_id` đã có.
+
+**Yêu cầu:**
+1. Viết `_load_existing_ids(output_path: Path) -> set[int]`:
+   - Nếu file không tồn tại → trả `set()`.
+   - Đọc mỗi dòng, parse JSON, lấy `article_id`, thêm vào set.
+   - Nếu dòng bị lỗi JSON → skip (file có thể bị cắt giữa chừng).
+2. Test: ghi 3 dòng JSONL, đọc lại, assert trả đúng 3 ids.
+
+**Đáp án:**
+
+```python
+import json
+from pathlib import Path
+
+def _load_existing_ids(output_path: Path) -> set[int]:
+    if not output_path.exists():
+        return set()
+    ids: set[int] = set()
+    with output_path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                try:
+                    row = json.loads(line)
+                    if "article_id" in row:
+                        ids.add(row["article_id"])
+                except json.JSONDecodeError:
+                    continue  # skip dòng bị lỗi
+    return ids
+
+# Test
+test_path = Path("/tmp/test_resume.jsonl")
+test_path.write_text(
+    '{"article_id": 1, "summary": "A"}\n'
+    '{"article_id": 5, "summary": "B"}\n'
+    '{"article_id": 10, "summary": "C"}\n'
+    'invalid json line\n',  # dòng lỗi — phải skip
+    encoding="utf-8",
+)
+ids = _load_existing_ids(test_path)
+assert ids == {1, 5, 10}
+assert _load_existing_ids(Path("/tmp/nonexistent.jsonl")) == set()
+print("OK!")
+```
+
+### Bài tập 6B.3 — Incremental append JSONL
+
+**Bối cảnh:** Thay vì ghi tất cả cuối cùng (mất hết nếu crash), ghi ngay mỗi kết quả.
+
+**Yêu cầu:**
+1. Viết `_append_jsonl(path: Path, row: dict)`:
+   - Tạo thư mục cha nếu chưa có.
+   - Mở file mode `"a"` (append), ghi 1 dòng JSON + `"\n"`.
+2. Test: append 3 rows, đọc lại file, assert có 3 dòng đúng.
+
+**Đáp án:**
+
+```python
+def _append_jsonl(path: Path, row: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False))
+        fh.write("\n")
+
+# Test
+out = Path("/tmp/test_append.jsonl")
+out.unlink(missing_ok=True)
+_append_jsonl(out, {"article_id": 1, "summary": "Tin A"})
+_append_jsonl(out, {"article_id": 2, "summary": "Tin B"})
+_append_jsonl(out, {"article_id": 3, "summary": "Tin C"})
+
+lines = out.read_text(encoding="utf-8").strip().split("\n")
+assert len(lines) == 3
+assert json.loads(lines[0])["article_id"] == 1
+assert json.loads(lines[2])["summary"] == "Tin C"
+print("OK!")
+```
+
+### Bài tập 6B.4 — asyncio.sleep cho rate limiting
+
+**Bối cảnh:** Free tier cho 15 RPM. Delay 4.5s giữa requests đảm bảo ~13 req/phút (safe margin). Dùng `await asyncio.sleep(delay)` để không block event loop.
+
+**Yêu cầu:**
+1. Viết async function `rate_limited_calls(items, delay)`:
+   - Lặp qua items, mỗi item gọi 1 async task giả lập.
+   - `await asyncio.sleep(delay)` giữa mỗi call.
+   - Trả list kết quả.
+2. Đo thời gian: 5 items, delay=0.5s → tổng >= 2.0s (4 delays).
+
+**Đáp án:**
+
+```python
+import asyncio
+import time
+
+async def fake_api_call(item: str) -> str:
+    await asyncio.sleep(0.05)  # giả lập API latency
+    return f"result:{item}"
+
+async def rate_limited_calls(items: list[str], delay: float) -> list[str]:
+    results = []
+    for item in items:
+        result = await fake_api_call(item)
+        results.append(result)
+        await asyncio.sleep(delay)  # rate limit delay
+    return results
+
+async def main():
+    items = [f"article_{i}" for i in range(5)]
+    start = time.monotonic()
+    results = await rate_limited_calls(items, delay=0.5)
+    elapsed = time.monotonic() - start
+    assert len(results) == 5
+    assert elapsed >= 2.0  # 5 items × 0.5s delay (cuối cùng cũng delay)
+    print(f"5 items in {elapsed:.2f}s (rate limited). OK!")
+
+asyncio.run(main())
+```
+
+### Bài tập 6B.5 — Ước tính tài nguyên
+
+**Bối cảnh:** Trước khi chạy labeling, cần ước tính: bao nhiêu key, bao nhiêu ngày, bao lâu mỗi ngày?
+
+**Yêu cầu:**
+1. Viết function `estimate_resources(total_articles, num_keys, rpd_per_key, delay_seconds)`:
+   - `daily_capacity = num_keys * rpd_per_key`
+   - `days_needed = ceil(total_articles / daily_capacity)`
+   - `hours_per_day = min(total_articles, daily_capacity) * delay_seconds / 3600`
+   - Trả dict với 3 giá trị trên.
+2. Test: 2810 bài, 9 keys, 450 RPD, 4.5s delay.
+
+**Đáp án:**
+
+```python
+import math
+
+def estimate_resources(
+    total_articles: int, num_keys: int, rpd_per_key: int, delay_seconds: float
+) -> dict:
+    daily_capacity = num_keys * rpd_per_key
+    days_needed = math.ceil(total_articles / daily_capacity)
+    articles_per_day = min(total_articles, daily_capacity)
+    hours_per_day = articles_per_day * delay_seconds / 3600
+    return {
+        "daily_capacity": daily_capacity,
+        "days_needed": days_needed,
+        "hours_per_day": round(hours_per_day, 1),
+    }
+
+# Test: dự án thực tế
+result = estimate_resources(2810, num_keys=9, rpd_per_key=450, delay_seconds=4.5)
+print(result)
+# {'daily_capacity': 4050, 'days_needed': 1, 'hours_per_day': 3.5}
+assert result["days_needed"] == 1
+assert result["daily_capacity"] == 4050
+assert 3.0 <= result["hours_per_day"] <= 4.0
+
+# Test: ít key hơn
+result2 = estimate_resources(2810, num_keys=3, rpd_per_key=450, delay_seconds=4.5)
+assert result2["days_needed"] == 3  # 3*450=1350/day, 2810/1350 = 2.08 → 3 ngày
+print("OK!")
+```
+
+### 🎯 Bài cuối chặng 6B — Code lại `labeling/batch_labeler.py`
+
+**Yêu cầu:** Tạo file `labeling/batch_labeler.py` gồm:
+- Constants: `MODEL = "gemini-3.1-flash-lite"`, `RPM = 15`, `RPD_PER_KEY = 500`, `SAFE_DELAY = 4.5`, `SAFE_RPD_BUDGET = 450`
+- `BatchConfig` dataclass (3 fields: batch_size, delay_between_requests, max_per_key_per_day)
+- `KeyUsageTracker` dataclass (4 methods: can_use, record_use, get_next_available, total_remaining)
+- `read_jsonl`, `_load_existing_ids`, `_append_jsonl` I/O helpers
+- `_label_one(article, labeler)` async function
+- `batch_label(input_path, output_path, *, config, api_keys, limit)` async function — core logic
+- `_keys_from_env()` helper
+- `_build_parser()`, `_run_cli(args)`, `main(argv)` CLI
+
+**Cách chạy:**
+```bash
+export GEMINI_API_KEYS=key1,key2,key3,...
+python -m labeling.batch_labeler \
+    --input data/raw/articles.jsonl \
+    --output data/labeled/labeled_articles.jsonl \
+    --limit 100
+```
+
+**Kiểm tra:** So với `labeling/batch_labeler.py` trong dự án — phải giống 100%.
+
+---
+
 ## Chặng 7 — Split Dataset (`labeling/split_dataset.py`)
 
 **Mục tiêu:** hiểu hash-based deterministic split, JSONL export. Code lại `labeling/split_dataset.py`.
@@ -2560,22 +2851,24 @@ function escapeHtml(value) {
 | 6 | `labeling/qc.py` | 4 |
 | 7 | `labeling/gemini_labeler.py` | 5 |
 | 8 | `labeling/label_dataset.py` | 6 |
-| 9 | `labeling/split_dataset.py` | 7 |
-| 10 | `app/crawler.py` | 8+9 |
-| 11 | `app/summarizer.py` | 10 |
-| 12 | `app/main.py` | 11 |
-| 13 | `app/templates/index.html` | 11 |
-| 14 | `requirements.txt` | copy |
-| 15 | `pyproject.toml` | copy |
-| 16 | `.env.example` | copy |
-| 17 | `Makefile` | copy |
-| 18 | `README.md` | copy |
-| 19 | `Dockerfile` + `docker-compose.yml` | copy |
+| 9 | `labeling/batch_labeler.py` | 6B |
+| 10 | `labeling/split_dataset.py` | 7 |
+| 11 | `app/crawler.py` | 8+9 |
+| 12 | `app/summarizer.py` | 10 |
+| 13 | `app/main.py` | 11 |
+| 14 | `app/templates/index.html` | 11 |
+| 15 | `requirements.txt` | copy |
+| 16 | `pyproject.toml` | copy |
+| 17 | `.env.example` | copy |
+| 18 | `Makefile` | copy |
+| 19 | `README.md` | copy |
+| 20 | `Dockerfile` + `docker-compose.yml` | copy |
 
 **Tiêu chí hoàn thành:** Chạy được:
 ```bash
 python -m app.crawler --mode labeling --source vnexpress --limit 5 --output data/raw/test.jsonl
 python -m labeling.label_dataset --input data/raw/test.jsonl --output data/labeled/test.jsonl --limit 3
+python -m labeling.batch_labeler --input data/raw/test.jsonl --output data/labeled/batch_test.jsonl --limit 5
 python -m labeling.split_dataset --input data/labeled/test.jsonl --output data/datasets/test
 uvicorn app.main:app --reload
 ```
@@ -2590,7 +2883,7 @@ uvicorn app.main:app --reload
 | 2 | 2-3 | Sources config + Prompt/Parser |
 | 3 | 4 | QC rules (regex, fuzzy matching) |
 | 4 | 5-6 | AI Studio labeler + label pipeline |
-| 5 | 7 | Split dataset |
+| 5 | 6B-7 | Batch labeling (rate limit, key rotation) + Split dataset |
 | 6 | 8-9 | Crawler (URL, SimHash, HTTP, RSS, extract) |
 | 7 | 10 | ViT5 Summarizer (PEFT, tokenizer, batch) |
 | 8 | 11 | FastAPI + HTML + tổng kết code lại dự án |

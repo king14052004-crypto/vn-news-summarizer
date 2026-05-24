@@ -1941,7 +1941,7 @@ print("OK!")
 ### 🎯 Bài cuối chặng 6B — Code lại `labeling/batch_labeler.py`
 
 **Yêu cầu:** Tạo file `labeling/batch_labeler.py` gồm:
-- Constants: `MODEL = "gemini-3.1-flash-lite"`, `RPM = 15`, `RPD_PER_KEY = 500`, `SAFE_DELAY = 4.5`, `SAFE_RPD_BUDGET = 450`
+- Constants: `MODEL = "gemini-3.1-flash-lite"`, `SAFE_DELAY = 4.5`, `SAFE_RPD_BUDGET = 450`
 - `BatchConfig` dataclass (2 fields: delay_between_requests, max_per_key_per_day)
 - `KeyUsageTracker` dataclass (4 methods: can_use, record_use, get_next_available, total_remaining)
 - `read_jsonl`, `_load_existing_ids`, `_append_jsonl` I/O helpers

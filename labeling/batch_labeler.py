@@ -195,7 +195,7 @@ async def batch_label(
             "model": MODEL,
             "total_articles": len(all_articles),
             "already_done": len(existing_ids),
-            "processed": 0,
+            "processed_this_run": 0,
             "message": "Nothing to process — all articles already labeled.",
         }
 

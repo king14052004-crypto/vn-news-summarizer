@@ -913,7 +913,7 @@ print("Tất cả test pass!")
 ### 🎯 Bài cuối chặng 3 — Code lại `labeling/prompt.py`
 
 **Yêu cầu:** Tạo file `labeling/prompt.py` (105 dòng):
-- `PROMPT_VERSION = "1.2.0"`, `PROMPT_MODEL = "gemini-2.5-flash"`, `PROMPT_PROVIDER = "aistudio"`
+- `PROMPT_VERSION = "1.2.0"`, `PROMPT_MODEL = "gemini-2.5-flash"`
 - `SYSTEM_PROMPT` — full text prompt biên tập viên (xem trong dự án)
 - `USER_TEMPLATE` — template có `{title}`, `{category}`, `{source}`, `{content_text}`
 - `GenerationParams` dataclass (4 fields: temperature=0.2, top_p=0.9, max_output_tokens=4096, response_mime_type="application/json")
@@ -1706,7 +1706,6 @@ Thời gian chạy: 2810 × 4.5s delay ≈ 3.5 giờ
 ```python
 @dataclass(slots=True)
 class BatchConfig:
-    batch_size: int = 50
     delay_between_requests: float = 4.5
     max_per_key_per_day: int = 450
 ```
@@ -1943,7 +1942,7 @@ print("OK!")
 
 **Yêu cầu:** Tạo file `labeling/batch_labeler.py` gồm:
 - Constants: `MODEL = "gemini-3.1-flash-lite"`, `RPM = 15`, `RPD_PER_KEY = 500`, `SAFE_DELAY = 4.5`, `SAFE_RPD_BUDGET = 450`
-- `BatchConfig` dataclass (3 fields: batch_size, delay_between_requests, max_per_key_per_day)
+- `BatchConfig` dataclass (2 fields: delay_between_requests, max_per_key_per_day)
 - `KeyUsageTracker` dataclass (4 methods: can_use, record_use, get_next_available, total_remaining)
 - `read_jsonl`, `_load_existing_ids`, `_append_jsonl` I/O helpers
 - `_label_one(article, labeler)` async function

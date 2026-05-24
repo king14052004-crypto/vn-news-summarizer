@@ -41,8 +41,6 @@ from labeling.qc import run_qc
 log = logging.getLogger(__name__)
 
 MODEL = "gemini-3.1-flash-lite"
-RPM = 15
-RPD_PER_KEY = 500
 SAFE_DELAY = 4.5  # seconds between requests (slightly > 60/15)
 SAFE_RPD_BUDGET = 450  # conservative daily budget per key
 
@@ -51,7 +49,6 @@ SAFE_RPD_BUDGET = 450  # conservative daily budget per key
 class BatchConfig:
     """Configuration for batch labeling."""
 
-    batch_size: int = 50
     delay_between_requests: float = SAFE_DELAY
     max_per_key_per_day: int = SAFE_RPD_BUDGET
 
@@ -288,7 +285,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=None, help="Max articles to label")
-    parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--delay", type=float, default=SAFE_DELAY,
                         help=f"Seconds between requests (default: {SAFE_DELAY})")
     parser.add_argument("--max-per-key", type=int, default=SAFE_RPD_BUDGET,
@@ -298,7 +294,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 async def _run_cli(args: argparse.Namespace) -> int:
     config = BatchConfig(
-        batch_size=args.batch_size,
         delay_between_requests=args.delay,
         max_per_key_per_day=args.max_per_key,
     )

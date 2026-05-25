@@ -1998,97 +1998,21 @@ print("OK! GeminiLabeler created.")
 
 **So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 42-75 — code phải giống.
 
-### Bài tập 5.4 — `generate()` phần 1: @retry, override, API call (dòng 77-118 trong dự án)
+### Bài tập 5.4 — Class `GeminiLabeler` hoàn chỉnh: thêm `generate()` (dòng 42-169 trong dự án)
 
-**Bối cảnh:** Method `generate()` là trái tim của `GeminiLabeler`. Phần đầu gồm:
-1. `@retry` decorator từ tenacity — chỉ retry khi gặp `GeminiTransientError`, exponential backoff 2-60s, tối đa 6 lần.
-2. Check `override_callable` — nếu có thì trả kết quả ngay, không gọi API (dùng khi test).
-3. Copy `self._keys` và `self._model_chain` ra biến local (thread-safe).
+**Bối cảnh:** Bài 5.3 bạn đã viết class `GeminiLabeler` với `__init__` và `_get_client`. Bây giờ thêm method `generate()` — trái tim của class. Method này:
+1. `@retry` decorator từ tenacity — chỉ retry `GeminiTransientError`, exponential backoff 2-60s, tối đa 6 lần.
+2. Check `override_callable` → nếu có thì trả kết quả ngay, không gọi API.
+3. Copy `self._keys`, `self._model_chain` ra biến local (thread-safe).
 4. Nested loop: `for model_name in models` → `for key_idx, api_key in enumerate(keys)`.
 5. Gọi API: `client.models.generate_content(...)` với config từ `self.params`.
-6. Kiểm tra response: nếu `text is None` → raise `GeminiLLMError`.
-7. `except GeminiLLMError: raise` — không retry lỗi fatal.
-
-**Yêu cầu:** Viết phần đầu method `generate()` (từ `@retry` đến hết `except GeminiLLMError: raise`) — code **đúng như dự án**.
-
-**Gợi ý:**
-- `@retry` decorator đặt trước method, nằm trong class.
-- `from google.genai import types` — lazy import, chỉ import khi thật sự gọi API.
-- `types.GenerateContentConfig(...)` nhận `temperature`, `top_p`, `max_output_tokens`, `response_mime_type` từ `self.params`.
-
-**Đáp án:**
-
-```python
-# Method này nằm trong class GeminiLabeler:
-
-    @retry(
-        reraise=True,
-        retry=retry_if_exception_type(GeminiTransientError),
-        wait=wait_exponential(multiplier=1, min=2, max=60),
-        stop=stop_after_attempt(6),
-    )
-    def generate(self, *, system: str, user: str) -> str:
-        """Generate a label using AI Studio.
-
-        Key rotation and model fallback are handled per-call using local
-        iteration over snapshot copies of keys and models.  This is safe
-        for concurrent use from multiple threads.
-        """
-        if self._override is not None:
-            return self._override(system, user)
-
-        from google.genai import types
-
-        keys = list(self._keys)
-        models = list(self._model_chain)
-        last_exc: Exception | None = None
-
-        for model_name in models:
-            for key_idx, api_key in enumerate(keys):
-                client = self._get_client(api_key)
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=f"{system}\n\n{user}",
-                        config=types.GenerateContentConfig(
-                            temperature=self.params.temperature,
-                            top_p=self.params.top_p,
-                            max_output_tokens=self.params.max_output_tokens,
-                            response_mime_type=self.params.response_mime_type,
-                        ),
-                    )
-                    text = response.text
-                    if text is None:
-                        raise GeminiLLMError(
-                            f"empty/blocked response from {model_name}"
-                        )
-                    return str(text)
-                except GeminiLLMError:
-                    raise
-                # ... phần error classification ở bài 5.5
-
-# Test (dùng override — không cần API thật)
-labeler = GeminiLabeler(
-    api_keys=["key1"],
-    override_callable=lambda sys, usr: '{"summary":"test"}',
-)
-result = labeler.generate(system="System", user="User")
-assert result == '{"summary":"test"}'
-print("OK! generate() override hoạt động.")
-```
-
-**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 77-118 — code phải giống.
-
-### Bài tập 5.5 — `generate()` phần 2: error classification + for/else (dòng 119-169 trong dự án)
-
-**Bối cảnh:** Tiếp tục bài 5.4. Sau `except GeminiLLMError: raise`, block `except Exception as exc:` phân loại lỗi **inline** (không gọi function riêng):
-1. `err = str(exc).lower()` — lowercase để so sánh.
-2. `is_quota`: check `any(m in err for m in ("429", "resource has been exhausted", ...))` → `continue` (thử key tiếp).
-3. `is_transient`: check `any(m in err for m in ("deadline", "unavailable", ...))` → `raise GeminiTransientError` (tenacity sẽ retry).
-4. Model not found (`"not found"`, `"does not exist"`, `"invalid"`) → `break` (thử model tiếp).
-5. Còn lại → `raise GeminiLLMError` (fatal).
-6. `for...else` pattern: nếu inner loop kết thúc bình thường (tất cả keys bị quota) → `else: continue` → thử model tiếp.
-7. Sau outer loop → `raise GeminiLLMError("All models/keys exhausted...")`.
+6. Error classification inline:
+   - quota → `continue` (thử key tiếp)
+   - transient → `raise GeminiTransientError` (tenacity retry)
+   - model not found → `break` (thử model tiếp)
+   - fatal → `raise GeminiLLMError`
+7. `for...else` pattern: tất cả keys bị quota → `else: continue` → thử model tiếp.
+8. Hết tất cả → `raise GeminiLLMError("All models/keys exhausted...")`.
 
 **Gợi ý về `for...else` pattern:**
 ```python
@@ -2103,12 +2027,45 @@ else:
     continue
 ```
 
-**Yêu cầu:** Ghép bài 5.4 + phần error classification + for/else thành method `generate()` hoàn chỉnh — code **đúng như dự án**.
+**Yêu cầu:** Viết lại class `GeminiLabeler` **hoàn chỉnh** — bao gồm `__init__` + `_get_client` (bài 5.3) + thêm `generate()`. Code **đúng như dự án**.
 
 **Đáp án:**
 
 ```python
-# Method này nằm trong class GeminiLabeler (ghép bài 5.4 + 5.5):
+class GeminiLabeler:
+    """AI Studio labeler with key rotation and model fallback.
+
+    Each call to :meth:`generate` iterates over a **local copy** of the key
+    list so that concurrent threads (via ``asyncio.to_thread``) never share
+    mutable rotation state.  This avoids race conditions where one thread's
+    quota error cascades into marking other threads' keys as exhausted.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_keys: list[str] | None = None,
+        model_chain: list[str] | None = None,
+        params: GenerationParams | None = None,
+        override_callable: OverrideFn | None = None,
+    ) -> None:
+        raw_keys = api_keys or _keys_from_env()
+        if not raw_keys:
+            raise GeminiLLMError("No API keys provided for AI Studio labeling")
+        self._keys: list[str] = list(raw_keys)
+        self._model_chain = model_chain or list(DEFAULT_MODEL_CHAIN)
+        self.params = params or GenerationParams()
+        self._override = override_callable
+        self._clients: dict[str, Any] = {}
+        self._clients_lock = threading.Lock()
+
+    def _get_client(self, api_key: str) -> Any:
+        with self._clients_lock:
+            if api_key not in self._clients:
+                from google import genai
+
+                self._clients[api_key] = genai.Client(api_key=api_key)
+            return self._clients[api_key]
 
     @retry(
         reraise=True,
@@ -2209,16 +2166,17 @@ labeler = GeminiLabeler(
     api_keys=["key1"],
     override_callable=lambda sys, usr: '{"summary":"test","confidence":0.9}',
 )
+assert labeler._keys == ["key1"]
 result = labeler.generate(system="You are a journalist.", user="Summarize this.")
 assert result == '{"summary":"test","confidence":0.9}'
 print(f"OK! generate() trả: {result}")
 ```
 
-**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 77-169 — code phải giống.
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 42-169 — class phải giống 100%.
 
 ### 🎯 Bài cuối chặng 5 — Code lại `labeling/gemini_labeler.py`
 
-**Yêu cầu:** Ghép bài 5.1 + 5.2 + 5.3 + 5.4 + 5.5 thành file `labeling/gemini_labeler.py` hoàn chỉnh (182 dòng). Bỏ phần test, chỉ giữ code.
+**Yêu cầu:** Ghép bài 5.1 (imports/constants/exceptions) + 5.4 (class GeminiLabeler hoàn chỉnh) + 5.2 (_keys_from_env) thành file `labeling/gemini_labeler.py` hoàn chỉnh (182 dòng). Bỏ phần test, chỉ giữ code.
 
 **Đáp án — file hoàn chỉnh:**
 
@@ -4193,16 +4151,65 @@ print("OK! ViT5Summarizer created, model chưa load.")
 
 **So sánh dự án:** Mở `app/summarizer.py` dòng 22-68 — code phải giống.
 
-### Bài tập 10.3 — _ensure_loaded + summarize + summarize_batch (dòng 70-138 trong dự án)
+### Bài tập 10.3 — Class `ViT5Summarizer` hoàn chỉnh: thêm `_ensure_loaded` + `summarize` + `summarize_batch` (dòng 22-138 trong dự án)
 
-**Bối cảnh:** `_ensure_loaded` lazy load model + tokenizer lần đầu gọi. `summarize` gọi `summarize_batch` cho 1 text. `summarize_batch` dùng empty mask (skip text rỗng), tokenize + generate theo batch, rồi re-insert `""` cho các vị trí rỗng.
+**Bối cảnh:** Bài 10.2 bạn đã viết class `ViT5Summarizer` với `__init__` và `_load_as_peft_adapter`. Bây giờ thêm 3 methods còn lại:
+- `_ensure_loaded()`: lazy load model + tokenizer lần đầu gọi. Thử PEFT adapter trước, nếu không phải → load trực tiếp.
+- `summarize(text)`: gọi `summarize_batch([text])[0]` cho 1 bài.
+- `summarize_batch(texts)`: xử lý nhiều bài cùng lúc. Tạo `empty_mask` đánh dấu text rỗng → chỉ tokenize + generate text non-empty → re-insert `""` cho vị trí rỗng.
 
-**Yêu cầu:** Viết `_ensure_loaded`, `summarize`, `summarize_batch` — code **đúng như dự án**.
+**Yêu cầu:** Viết lại class `ViT5Summarizer` **hoàn chỉnh** — bao gồm `__init__` + `_load_as_peft_adapter` (bài 10.2) + thêm `_ensure_loaded` + `summarize` + `summarize_batch`. Code **đúng như dự án**.
 
 **Đáp án:**
 
 ```python
-# Các method này nằm trong class ViT5Summarizer:
+class ViT5Summarizer:
+    """Lazy wrapper around the fine-tuned ViT5 model.
+
+    The expected production/demo value is ``HF_MODEL_ID`` pointing to the
+    model or LoRA adapter equivalent to ``models/vit5-news-v2/checkpoint-309``.
+    If the ID is a PEFT adapter, ``HF_BASE_MODEL_ID`` may override the
+    base model; otherwise the adapter config's base model is used.
+    """
+
+    def __init__(
+        self,
+        model_id: str | None = None,
+        *,
+        base_model_id: str | None = None,
+        token: str | None = None,
+        device: str | None = None,
+        generation: GenerationConfig | None = None,
+    ) -> None:
+        self.model_id = model_id or os.environ.get("HF_MODEL_ID") or "VietAI/vit5-base"
+        self.base_model_id = base_model_id or os.environ.get("HF_BASE_MODEL_ID")
+        self.token = token if token is not None else os.environ.get("HF_TOKEN")
+        self.device = device or os.environ.get("MODEL_DEVICE")
+        self.generation = generation or GenerationConfig()
+        self._model: Any | None = None
+        self._tokenizer: Any | None = None
+
+    def _load_as_peft_adapter(self, transformers: Any) -> tuple[Any, Any] | None:
+        try:
+            from peft import PeftConfig, PeftModel
+
+            peft_cfg = PeftConfig.from_pretrained(self.model_id, token=self.token)
+            base_name = self.base_model_id or peft_cfg.base_model_name_or_path
+            base_model = transformers.AutoModelForSeq2SeqLM.from_pretrained(
+                base_name,
+                token=self.token,
+            )
+            model = PeftModel.from_pretrained(base_model, self.model_id, token=self.token)
+            tokenizer_source = self.model_id
+            if Path(self.model_id).exists() and not (Path(self.model_id) / "tokenizer.json").exists():
+                tokenizer_source = base_name
+            tokenizer = transformers.AutoTokenizer.from_pretrained(
+                tokenizer_source,
+                token=self.token,
+            )
+            return model, tokenizer
+        except Exception:
+            return None
 
     def _ensure_loaded(self) -> tuple[Any, Any]:
         if self._model is not None and self._tokenizer is not None:
@@ -4273,13 +4280,20 @@ print("OK! ViT5Summarizer created, model chưa load.")
                 result.append(decoded[cursor])
                 cursor += 1
         return result
+
+# Test (không cần model thật — chỉ kiểm tra class tạo đúng)
+s = ViT5Summarizer()
+assert s.model_id == "VietAI/vit5-base"
+assert s._model is None  # chưa load (lazy)
+assert s.summarize("") == ""  # text rỗng → trả ""
+print("OK! ViT5Summarizer hoàn chỉnh.")
 ```
 
-**So sánh dự án:** Mở `app/summarizer.py` dòng 70-138 — code phải giống.
+**So sánh dự án:** Mở `app/summarizer.py` dòng 22-138 — class phải giống 100%.
 
 ### 🎯 Bài cuối chặng 10 — Code lại `app/summarizer.py`
 
-**Yêu cầu:** Ghép bài 10.1 + 10.2 + 10.3 thành file `app/summarizer.py` hoàn chỉnh (138 dòng). Bỏ phần test, chỉ giữ code.
+**Yêu cầu:** Ghép bài 10.1 (imports + GenerationConfig) + 10.3 (class ViT5Summarizer hoàn chỉnh) thành file `app/summarizer.py` hoàn chỉnh (138 dòng). Bỏ phần test, chỉ giữ code.
 
 **Đáp án — file hoàn chỉnh:**
 

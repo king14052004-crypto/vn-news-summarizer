@@ -18,7 +18,7 @@ Tài liệu này dành cho người mới học. Mục tiêu: hiểu từng mả
 | `labeling/qc.py` | 153 | 4 |
 | `labeling/gemini_labeler.py` | 182 | 5 |
 | `labeling/label_dataset.py` | 133 | 6 |
-| `labeling/batch_labeler.py` | 260 | 6B |
+| `labeling/batch_labeler.py` | 255 | 6B |
 | `labeling/split_dataset.py` | 100 | 7 |
 | `app/crawler.py` | 514 | 8-9 |
 | `app/summarizer.py` | 138 | 10 |
@@ -472,6 +472,75 @@ except ValidationError as e:
 - 2 dataclass: `ArticleCandidate` (7 fields), `CrawledArticle` (11 fields + method).
 - 3 BaseModel: `SummaryItem`, `SummarizeResponse`, `HealthResponse`.
 
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""Shared data shapes for crawl, labeling, and API responses."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+@dataclass(slots=True, frozen=True)
+class ArticleCandidate:
+    source: str
+    source_name: str
+    url: str
+    title: str
+    published_at: datetime | None = None
+    category: str | None = None
+    author: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class CrawledArticle:
+    article_id: int
+    source: str
+    source_name: str
+    url: str
+    title: str
+    category: str | None
+    published_at: str | None
+    author: str | None
+    content_text: str
+    word_count: int
+    url_hash: str
+
+    def to_jsonl_record(self) -> dict[str, object]:
+        return {
+            "article_id": self.article_id,
+            "source": self.source,
+            "url": self.url,
+            "title": self.title,
+            "category": self.category,
+            "published_at": self.published_at,
+            "content_text": self.content_text,
+        }
+
+
+class SummaryItem(BaseModel):
+    title: str
+    source: str
+    url: str
+    published_at: str | None = None
+    summary: str
+
+
+class SummarizeResponse(BaseModel):
+    date: str
+    total: int = Field(ge=0)
+    items: list[SummaryItem]
+
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+```
+
 **Kiểm tra:** So với `app/schemas.py` trong dự án — phải giống 100%.
 
 ---
@@ -680,14 +749,201 @@ print("OK!")
 
 ### 🎯 Bài cuối chặng 2 — Code lại `app/sources.py`
 
-**Yêu cầu:** Tạo file `app/sources.py` (189 dòng) gồm:
-- 4 constants: `USER_AGENT`, `CRAWL_DELAY_SECONDS`, `TIMEOUT_SECONDS`, `MAX_RETRIES`
-- `NewsSource` dataclass (frozen, slots, 6 fields)
-- `SOURCES` list — đủ 8 nguồn báo (vnexpress, tuoitre, thanhnien, vietnamnet, dantri, znews, vtcnews, laodong). Lưu ý: `laodong` có `enabled=False`, `vietnamnet` có `max_items_per_feed=100`.
-- `CANONICAL_CATEGORIES` dict — đủ 8 categories (thoi_su, kinh_doanh, cong_nghe, the_thao, giai_tri, giao_duc, suc_khoe, the_gioi)
-- `CrawlStats` dataclass (slots, mutable, dùng `field(default_factory=list)`)
-- `enabled_sources(only)` function
-- `canonical_category(raw)` function
+**Yêu cầu:** Tạo file `app/sources.py` (189 dòng) gồm tất cả phần trên.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""RSS sources frozen from the repo's RSS fix commit.
+
+This replaces the previous YAML-driven source config for the simplified
+runtime, but keeps the exact operational choices that produced the v2
+labeling corpus: Lao Dong disabled and VietnamNet capped at 100 items
+per feed.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+USER_AGENT = "vn-news-summarizer-research/0.1 (+https://github.com/khangnh22ds/vn-news-summarizer)"
+CRAWL_DELAY_SECONDS = 1.0
+TIMEOUT_SECONDS = 20.0
+MAX_RETRIES = 3
+
+
+@dataclass(slots=True, frozen=True)
+class NewsSource:
+    id: str
+    name: str
+    domain: str
+    rss: list[str]
+    enabled: bool = True
+    max_items_per_feed: int | None = None
+
+
+SOURCES: list[NewsSource] = [
+    NewsSource(
+        id="vnexpress",
+        name="VnExpress",
+        domain="vnexpress.net",
+        rss=[
+            "https://vnexpress.net/rss/tin-moi-nhat.rss",
+            "https://vnexpress.net/rss/thoi-su.rss",
+            "https://vnexpress.net/rss/kinh-doanh.rss",
+            "https://vnexpress.net/rss/so-hoa.rss",
+            "https://vnexpress.net/rss/the-thao.rss",
+            "https://vnexpress.net/rss/giai-tri.rss",
+            "https://vnexpress.net/rss/giao-duc.rss",
+            "https://vnexpress.net/rss/khoa-hoc.rss",
+            "https://vnexpress.net/rss/suc-khoe.rss",
+        ],
+    ),
+    NewsSource(
+        id="tuoitre",
+        name="Tuoi Tre Online",
+        domain="tuoitre.vn",
+        rss=[
+            "https://tuoitre.vn/rss/tin-moi-nhat.rss",
+            "https://tuoitre.vn/rss/thoi-su.rss",
+            "https://tuoitre.vn/rss/kinh-doanh.rss",
+            "https://tuoitre.vn/rss/cong-nghe.rss",
+            "https://tuoitre.vn/rss/the-thao.rss",
+            "https://tuoitre.vn/rss/giai-tri.rss",
+            "https://tuoitre.vn/rss/giao-duc.rss",
+            "https://tuoitre.vn/rss/suc-khoe.rss",
+        ],
+    ),
+    NewsSource(
+        id="thanhnien",
+        name="Thanh Nien",
+        domain="thanhnien.vn",
+        rss=[
+            "https://thanhnien.vn/rss/home.rss",
+            "https://thanhnien.vn/rss/thoi-su.rss",
+            "https://thanhnien.vn/rss/kinh-te.rss",
+            "https://thanhnien.vn/rss/cong-nghe.rss",
+            "https://thanhnien.vn/rss/the-thao.rss",
+            "https://thanhnien.vn/rss/giai-tri.rss",
+            "https://thanhnien.vn/rss/giao-duc.rss",
+            "https://thanhnien.vn/rss/suc-khoe.rss",
+        ],
+    ),
+    NewsSource(
+        id="vietnamnet",
+        name="VietnamNet",
+        domain="vietnamnet.vn",
+        max_items_per_feed=100,
+        rss=[
+            "https://vietnamnet.vn/rss/thoi-su.rss",
+            "https://vietnamnet.vn/rss/kinh-doanh.rss",
+            "https://vietnamnet.vn/rss/cong-nghe.rss",
+            "https://vietnamnet.vn/rss/the-thao.rss",
+            "https://vietnamnet.vn/rss/giai-tri.rss",
+            "https://vietnamnet.vn/rss/giao-duc.rss",
+            "https://vietnamnet.vn/rss/suc-khoe.rss",
+        ],
+    ),
+    NewsSource(
+        id="dantri",
+        name="Dan Tri",
+        domain="dantri.com.vn",
+        rss=[
+            "https://dantri.com.vn/rss/home.rss",
+            "https://dantri.com.vn/rss/xa-hoi.rss",
+            "https://dantri.com.vn/rss/kinh-doanh.rss",
+            "https://dantri.com.vn/rss/cong-nghe.rss",
+            "https://dantri.com.vn/rss/the-thao.rss",
+            "https://dantri.com.vn/rss/giai-tri.rss",
+            "https://dantri.com.vn/rss/giao-duc-huong-nghiep.rss",
+            "https://dantri.com.vn/rss/suc-khoe.rss",
+        ],
+    ),
+    NewsSource(
+        id="znews",
+        name="Znews",
+        domain="znews.vn",
+        rss=[
+            "https://znews.vn/rss/thoi-su.rss",
+            "https://znews.vn/rss/xa-hoi.rss",
+            "https://znews.vn/rss/cong-nghe.rss",
+            "https://znews.vn/rss/the-thao.rss",
+            "https://znews.vn/rss/giai-tri.rss",
+            "https://znews.vn/rss/giao-duc.rss",
+            "https://znews.vn/rss/suc-khoe.rss",
+            "https://znews.vn/rss/the-gioi.rss",
+        ],
+    ),
+    NewsSource(
+        id="vtcnews",
+        name="VTC News",
+        domain="vtcnews.vn",
+        rss=[
+            "https://vtcnews.vn/rss/feed.rss",
+            "https://vtcnews.vn/rss/thoi-su.rss",
+            "https://vtcnews.vn/rss/kinh-te.rss",
+            "https://vtcnews.vn/rss/cong-nghe.rss",
+            "https://vtcnews.vn/rss/the-thao.rss",
+            "https://vtcnews.vn/rss/giai-tri.rss",
+        ],
+    ),
+    NewsSource(
+        id="laodong",
+        name="Lao Dong",
+        domain="laodong.vn",
+        enabled=False,
+        rss=[
+            "https://laodong.vn/rss/home.rss",
+            "https://laodong.vn/rss/thoi-su.rss",
+            "https://laodong.vn/rss/kinh-doanh.rss",
+            "https://laodong.vn/rss/cong-nghe.rss",
+            "https://laodong.vn/rss/the-thao.rss",
+            "https://laodong.vn/rss/van-hoa-giai-tri.rss",
+            "https://laodong.vn/rss/giao-duc.rss",
+            "https://laodong.vn/rss/suc-khoe.rss",
+        ],
+    ),
+]
+
+
+CANONICAL_CATEGORIES: dict[str, list[str]] = {
+    "thoi_su": ["thời sự", "thoi su", "thoi-su", "thoi_su", "xã hội", "xa-hoi", "xa_hoi", "xa hoi"],
+    "kinh_doanh": ["kinh doanh", "kinh-doanh", "kinh_doanh", "kinh tế", "kinh-te", "kinh_te", "kinh te"],
+    "cong_nghe": ["công nghệ", "cong nghe", "cong-nghe", "cong_nghe", "so-hoa", "so_hoa", "khoa-hoc", "khoa_hoc"],
+    "the_thao": ["thể thao", "the thao", "the-thao", "the_thao"],
+    "giai_tri": ["giải trí", "giai tri", "giai-tri", "giai_tri", "van-hoa-giai-tri", "van_hoa_giai_tri"],
+    "giao_duc": ["giáo dục", "giao duc", "giao-duc", "giao_duc", "giao-duc-huong-nghiep", "giao_duc_huong_nghiep"],
+    "suc_khoe": ["sức khỏe", "suc khoe", "suc-khoe", "suc_khoe"],
+    "the_gioi": ["thế giới", "the gioi", "the-gioi", "the_gioi"],
+}
+
+
+@dataclass(slots=True)
+class CrawlStats:
+    discovered: int = 0
+    fetched: int = 0
+    extracted: int = 0
+    skipped_duplicate: int = 0
+    skipped_robots: int = 0
+    fetch_failed: int = 0
+    extract_failed: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+def enabled_sources(only: set[str] | None = None) -> list[NewsSource]:
+    return [s for s in SOURCES if s.enabled and (only is None or s.id in only)]
+
+
+def canonical_category(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    needle = raw.lower()
+    for key, aliases in CANONICAL_CATEGORIES.items():
+        if any(alias in needle or needle in alias for alias in aliases):
+            return key
+    return None
+```
 
 **Kiểm tra:** So với `app/sources.py` trong dự án — phải giống 100%.
 
@@ -912,15 +1168,116 @@ print("Tất cả test pass!")
 
 ### 🎯 Bài cuối chặng 3 — Code lại `labeling/prompt.py`
 
-**Yêu cầu:** Tạo file `labeling/prompt.py` (105 dòng):
-- `PROMPT_VERSION = "1.2.0"`, `PROMPT_MODEL = "gemini-2.5-flash"`
-- `SYSTEM_PROMPT` — full text prompt biên tập viên (xem trong dự án)
-- `USER_TEMPLATE` — template có `{title}`, `{category}`, `{source}`, `{content_text}`
-- `GenerationParams` dataclass (4 fields: temperature=0.2, top_p=0.9, max_output_tokens=4096, response_mime_type="application/json")
-- `QcConfig` dataclass (5 fields: min_words=40, max_words=90, min_sentences=2, max_sentences=4, entity_fuzzy_min_ratio=0.85)
-- `LabelOutput` BaseModel
-- `render_user_prompt(...)` function
-- `parse_label_json(raw_text)` function
+**Yêu cầu:** Tạo file `labeling/prompt.py` (104 dòng) gồm tất cả phần trên.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""Prompt v1.2.0 and parser behavior used for the v2 labeling report."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+
+from pydantic import BaseModel, Field, ValidationError
+
+PROMPT_VERSION = "1.2.0"
+PROMPT_MODEL = "gemini-2.5-flash"
+
+SYSTEM_PROMPT = """
+Bạn là biên tập viên báo chí tiếng Việt. Tóm tắt phải:
+- Trung thực 100% với bài gốc; KHÔNG suy diễn, KHÔNG bịa số liệu hay tên riêng.
+- 2-3 câu, tổng cộng 40-70 từ.
+- Văn phong báo chí, trung lập, không cảm thán, không câu hỏi.
+- Giữ nguyên tên riêng, số liệu, ngày tháng đúng như bài gốc.
+- Nếu thông tin không đủ rõ, viết câu trung lập, KHÔNG bổ sung từ kiến thức ngoài.
+""".strip()
+
+USER_TEMPLATE = """
+Tiêu đề: {title}
+Chuyên mục: {category}
+Nguồn: {source}
+
+Nội dung:
+\"\"\"
+{content_text}
+\"\"\"
+
+Trả về JSON đúng schema:
+{{
+  "summary": "...",
+  "key_entities": ["..."],
+  "confidence": 0.0,
+  "refusal_reason": null
+}}
+""".strip()
+
+
+@dataclass(slots=True)
+class GenerationParams:
+    temperature: float = 0.2
+    top_p: float = 0.9
+    max_output_tokens: int = 4096
+    response_mime_type: str = "application/json"
+
+
+@dataclass(slots=True)
+class QcConfig:
+    min_words: int = 40
+    max_words: int = 90
+    min_sentences: int = 2
+    max_sentences: int = 4
+    entity_fuzzy_min_ratio: float = 0.85
+
+
+class LabelOutput(BaseModel):
+    summary: str
+    key_entities: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    refusal_reason: str | None = None
+
+
+def render_user_prompt(
+    *,
+    title: str,
+    category: str | None,
+    source: str,
+    content_text: str,
+    content_max_chars: int = 6000,
+) -> str:
+    snippet = content_text or ""
+    if len(snippet) > content_max_chars:
+        snippet = snippet[:content_max_chars].rsplit(" ", 1)[0] + " [...]"
+    return USER_TEMPLATE.format(
+        title=title or "",
+        category=category or "",
+        source=source,
+        content_text=snippet,
+    )
+
+
+def parse_label_json(raw_text: str) -> LabelOutput:
+    """Parse Gemini JSON output with the hardening from commit 8e8dda8."""
+    try:
+        data: Any = json.loads(raw_text)
+    except json.JSONDecodeError:
+        try:
+            data = json.loads(raw_text, strict=False)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM did not return valid JSON: {exc}") from exc
+    if isinstance(data, dict):
+        confidence = data.get("confidence")
+        if isinstance(confidence, int | float) and confidence > 1.0:
+            data["confidence"] = 1.0
+        if data.get("summary") is None and data.get("refusal_reason"):
+            data["summary"] = ""
+    try:
+        return LabelOutput(**data)
+    except ValidationError as exc:
+        raise ValueError(f"LLM JSON does not match schema: {exc}") from exc
+```
 
 **Kiểm tra:** So với `labeling/prompt.py` trong dự án — phải giống 100%.
 
@@ -1259,13 +1616,165 @@ print(f"Passed: {result.passed}, words: {result.word_count}, reasons: {result.re
 
 ### 🎯 Bài cuối chặng 4 — Code lại `labeling/qc.py`
 
-**Yêu cầu:** Tạo file `labeling/qc.py` (153 dòng) gồm:
-- Import `rapidfuzz` với fallback `difflib`
-- Import `LabelOutput`, `QcConfig` từ `labeling.prompt`
-- 6 regex constants: `_SENT_SPLIT`, `_NUMERIC`, `_PUNCT_RE`, `_DIGIT_GROUP`, `_TITLE_CHARS`, `_ENTITY`
-- Helper functions: `_norm`, `_word_count`, `_sentences`, `_numerics`, `_collapse_punct`, `_contains_numeric`, `_entities`, `_contains_entity`
-- `QcResult` dataclass + `to_dict`
-- `run_qc(output, source_text, cfg)` function
+**Yêu cầu:** Tạo file `labeling/qc.py` (153 dòng) gồm tất cả phần trên.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""Deterministic QC checks used before exporting training data."""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass, field
+
+try:
+    from rapidfuzz import fuzz
+except ImportError:  # pragma: no cover - fallback for minimal validation environments.
+    from difflib import SequenceMatcher
+
+    class _FuzzFallback:
+        @staticmethod
+        def partial_ratio(a: str, b: str) -> float:
+            return SequenceMatcher(None, a, b).ratio() * 100
+
+    fuzz = _FuzzFallback()
+
+from labeling.prompt import LabelOutput, QcConfig
+
+_SENT_SPLIT = re.compile(r"(?<=[\.!?\u2026])\s+")
+_NUMERIC = re.compile(r"\S*\d[\S]*")
+_PUNCT_RE = re.compile(r"[\s\-\u2013\u2014\.\,;:\(\)\[\]\{\}/]+")
+_DIGIT_GROUP = re.compile(r"\d{3,}")
+_TITLE_CHARS = (
+    "A-ZĐÁÀẢÃẠÂẤẦẨẪẬĂẮẰẲẴẶÉÈẺẼẸÊẾỀỂỄỆ"
+    "ÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ"
+)
+_ENTITY = re.compile(rf"(?:[{_TITLE_CHARS}][\wÀ-ỹ]*(?:\s+[{_TITLE_CHARS}][\wÀ-ỹ]*)+)")
+
+
+@dataclass(slots=True)
+class QcResult:
+    passed: bool
+    reasons: list[str] = field(default_factory=list)
+    word_count: int = 0
+    sentence_count: int = 0
+    missing_numbers: list[str] = field(default_factory=list)
+    missing_entities: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "passed": self.passed,
+            "reasons": self.reasons,
+            "word_count": self.word_count,
+            "sentence_count": self.sentence_count,
+            "missing_numbers": self.missing_numbers,
+            "missing_entities": self.missing_entities,
+        }
+
+
+def _norm(text: str) -> str:
+    return unicodedata.normalize("NFC", text or "").strip()
+
+
+def _word_count(text: str) -> int:
+    return len(_norm(text).split())
+
+
+def _sentences(text: str) -> list[str]:
+    return [part.strip() for part in _SENT_SPLIT.split(_norm(text)) if part.strip()]
+
+
+def _numerics(text: str) -> list[str]:
+    out: list[str] = []
+    for match in _NUMERIC.finditer(text):
+        token = match.group(0).strip(".,;:%()[]{}")
+        if token:
+            out.append(token)
+    return out
+
+
+def _collapse_punct(text: str) -> str:
+    return _PUNCT_RE.sub(" ", text).strip()
+
+
+def _contains_numeric(source: str, token: str) -> bool:
+    if token in source:
+        return True
+    collapsed_source = _collapse_punct(source)
+    collapsed_token = _collapse_punct(token)
+    if collapsed_token and collapsed_token in collapsed_source:
+        return True
+    groups = _DIGIT_GROUP.findall(token)
+    return bool(groups and all(group in source for group in groups))
+
+
+def _entities(text: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _ENTITY.finditer(text):
+        entity = match.group(0).strip()
+        if entity and entity not in seen:
+            seen.add(entity)
+            out.append(entity)
+    return out
+
+
+def _contains_entity(source: str, entity: str, *, min_ratio: float) -> bool:
+    if entity in source:
+        return True
+    collapsed_source = _collapse_punct(source)
+    collapsed_entity = _collapse_punct(entity)
+    if collapsed_entity and collapsed_entity in collapsed_source:
+        return True
+    if fuzz.partial_ratio(entity, source) >= min_ratio * 100:
+        return True
+    return any(len(token) >= 4 and token in source for token in entity.split())
+
+
+def run_qc(*, output: LabelOutput, source_text: str, cfg: QcConfig | None = None) -> QcResult:
+    cfg = cfg or QcConfig()
+    summary = _norm(output.summary)
+    source = _norm(source_text)
+    reasons: list[str] = []
+
+    if output.refusal_reason:
+        reasons.append(f"llm_refusal:{output.refusal_reason}")
+
+    wc = _word_count(summary)
+    if wc < cfg.min_words:
+        reasons.append(f"too_short:{wc}<{cfg.min_words}")
+    if wc > cfg.max_words:
+        reasons.append(f"too_long:{wc}>{cfg.max_words}")
+
+    sentence_count = len(_sentences(summary))
+    if sentence_count < cfg.min_sentences:
+        reasons.append(f"too_few_sentences:{sentence_count}<{cfg.min_sentences}")
+    if sentence_count > cfg.max_sentences:
+        reasons.append(f"too_many_sentences:{sentence_count}>{cfg.max_sentences}")
+
+    missing_numbers = [token for token in _numerics(summary) if not _contains_numeric(source, token)]
+    if missing_numbers:
+        reasons.append(f"unsupported_numbers:{','.join(missing_numbers[:5])}")
+
+    missing_entities = [
+        entity
+        for entity in _entities(summary)
+        if not _contains_entity(source, entity, min_ratio=cfg.entity_fuzzy_min_ratio)
+    ]
+    if missing_entities:
+        reasons.append(f"unsupported_entities:{','.join(missing_entities[:5])}")
+
+    return QcResult(
+        passed=not reasons,
+        reasons=reasons,
+        word_count=wc,
+        sentence_count=sentence_count,
+        missing_numbers=missing_numbers,
+        missing_entities=missing_entities,
+    )
+```
 
 **Kiểm tra:** So với `labeling/qc.py` trong dự án — phải giống 100%.
 
@@ -1274,6 +1783,8 @@ print(f"Passed: {result.passed}, words: {result.word_count}, reasons: {result.re
 ## Chặng 5 — AI Studio Labeler (`labeling/gemini_labeler.py`)
 
 **Mục tiêu:** hiểu google.genai SDK, key rotation, model fallback, retry, thread safety. Code lại `labeling/gemini_labeler.py`.
+
+Mỗi bài tập dưới đây xây dựng **đúng một phần** của file `labeling/gemini_labeler.py` trong dự án. Bạn sẽ viết từng mảnh, rồi bài cuối ghép tất cả lại thành file hoàn chỉnh 182 dòng.
 
 ### Lý thuyết
 
@@ -1295,250 +1806,601 @@ response = client.models.generate_content(
 print(response.text)
 ```
 
-**3. Key rotation:** khi key bị rate limit → tự chuyển sang key tiếp.
+**3. Key rotation:** khi key bị rate limit → tự chuyển sang key tiếp theo trong danh sách.
 
 **4. Model fallback:** `gemini-2.5-flash` không khả dụng → thử `gemini-2.0-flash`.
 
-**5. Error classification:** quota → thử key tiếp, transient → retry, model not found → thử model tiếp, fatal → dừng.
+**5. Error classification (inline):** phân loại lỗi ngay trong vòng lặp:
+- quota → `continue` (thử key tiếp)
+- transient → `raise GeminiTransientError` (tenacity sẽ retry)
+- model not found → `break` (thử model tiếp)
+- fatal → `raise GeminiLLMError` (dừng)
 
-**6. Thread safety:** dùng `threading.Lock` bảo vệ dict `_clients`.
+**6. Thread safety:** dùng `threading.Lock` bảo vệ dict `_clients` khi nhiều thread gọi cùng lúc.
 
-### Bài tập 5.1 — Exception classes
+**7. `OverrideFn`:** type alias `Callable[[str, str], str]` — cho phép inject function giả lập thay vì gọi API thật (dùng khi test).
 
-**Bối cảnh:** Dự án phân biệt 2 loại lỗi:
-- `GeminiLLMError`: lỗi không thể retry (fatal) — ví dụ Gemini trả response blocked.
-- `GeminiTransientError`: lỗi có thể retry (tạm thời) — ví dụ server 503.
+### Bài tập 5.1 — Imports, constants, exceptions (dòng 1-39 trong dự án)
 
-Kế thừa `RuntimeError` để có thể bắt bằng `except RuntimeError`.
+**Bối cảnh:** Phần đầu file `gemini_labeler.py` gồm: module docstring, imports, constant `DEFAULT_MODEL_CHAIN`, 2 exception classes, và type alias `OverrideFn`. Đây là nền tảng để xây dựng class `GeminiLabeler`.
 
 **Yêu cầu:**
-1. Tạo 2 exception class: `GeminiLLMError(RuntimeError)` và `GeminiTransientError(RuntimeError)`.
-2. Test: raise và catch mỗi loại, kiểm tra `isinstance`.
+1. Viết module docstring giải thích file dùng để làm gì (multi-key rotation, model fallback).
+2. Import: `annotations`, `logging`, `os`, `threading`, `Callable` từ `collections.abc`, `Any` từ `typing`, tenacity (`retry`, `retry_if_exception_type`, `stop_after_attempt`, `wait_exponential`), `GenerationParams` từ `labeling.prompt`.
+3. Tạo logger: `log = logging.getLogger(__name__)`.
+4. Tạo `DEFAULT_MODEL_CHAIN: list[str]` = `["gemini-2.5-flash", "gemini-2.0-flash"]`.
+5. Tạo 2 exception classes kế thừa `RuntimeError` — dùng docstring **đúng như dự án** (không dùng `pass`).
+6. Tạo type alias `OverrideFn = Callable[[str, str], str]`.
+7. Test: raise và catch mỗi exception.
 
 **Đáp án:**
 
 ```python
+"""Google AI Studio (Gemini) client with multi-key rotation for labeling.
+
+Labeling runs on free AI Studio API keys.  Multiple keys can be supplied
+(comma-separated in the env-var or passed as a list) so that when one key
+hits a rate / quota limit the next key is tried automatically.
+
+Model fallback order (configurable):
+    gemini-2.5-flash  →  gemini-2.0-flash
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+from collections.abc import Callable
+from typing import Any
+
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from labeling.prompt import GenerationParams
+
+log = logging.getLogger(__name__)
+
+DEFAULT_MODEL_CHAIN: list[str] = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+]
+
+
 class GeminiLLMError(RuntimeError):
-    """Lỗi không thể retry."""
-    pass
+    """Unrecoverable error from AI Studio."""
+
 
 class GeminiTransientError(RuntimeError):
-    """Lỗi tạm thời, có thể retry."""
-    pass
+    """Retryable error (rate-limit, timeout, transient server error)."""
+
+
+OverrideFn = Callable[[str, str], str]
 
 # Test
 try:
-    raise GeminiLLMError("Model blocked response")
+    raise GeminiLLMError("blocked response")
 except GeminiLLMError as e:
-    print(f"Caught LLM error: {e}")
-    assert isinstance(e, RuntimeError)  # cũng là RuntimeError
+    assert isinstance(e, RuntimeError)
+    print(f"Caught: {e}")
 
 try:
-    raise GeminiTransientError("503 server error")
+    raise GeminiTransientError("503")
 except GeminiTransientError as e:
-    print(f"Caught transient: {e}")
+    print(f"Caught: {e}")
+
+print(f"Models: {DEFAULT_MODEL_CHAIN}")
+print(f"OverrideFn type: {OverrideFn}")
 ```
 
-### Bài tập 5.2 — _keys_from_env
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 1-39 — code phải giống.
 
-**Bối cảnh:** Đọc API key từ environment. Ưu tiên `GEMINI_API_KEYS` (nhiều key), fallback `GEMINI_API_KEY` (1 key). Nếu không có → raise `GeminiLLMError`.
+### Bài tập 5.2 — `_keys_from_env()` (dòng 172-182 trong dự án)
 
-**Yêu cầu:** Viết function `_keys_from_env() -> list[str]`:
-1. Đọc `GEMINI_API_KEYS`, split bằng dấu phẩy, strip, lọc rỗng.
-2. Nếu rỗng → đọc `GEMINI_API_KEY`.
-3. Nếu cả hai rỗng → raise `GeminiLLMError`.
+**Bối cảnh:** Đọc API key từ environment. Ưu tiên `GEMINI_API_KEYS` (nhiều key, phân cách dấu phẩy), fallback `GEMINI_API_KEY` (1 key). Nếu không có → raise `GeminiLLMError`. Function này nằm cuối file, ngoài class.
 
-(Giống bài 0.4 nhưng dùng `GeminiLLMError` thay `RuntimeError`.)
+**Yêu cầu:** Viết function `_keys_from_env() -> list[str]` — code **đúng như dự án**:
+1. Đọc `GEMINI_API_KEYS`, strip. Nếu rỗng → đọc `GEMINI_API_KEY`.
+2. Nếu cả hai rỗng → raise `GeminiLLMError` với message chính xác.
+3. Return list sau khi split dấu phẩy, strip, lọc rỗng.
 
 **Đáp án:**
 
 ```python
-import os
-
 def _keys_from_env() -> list[str]:
+    """Read comma-separated API keys from ``GEMINI_API_KEYS``."""
     raw = os.environ.get("GEMINI_API_KEYS", "").strip()
     if not raw:
         single = os.environ.get("GEMINI_API_KEY", "").strip()
         if single:
             return [single]
-        raise GeminiLLMError("Set GEMINI_API_KEYS (comma-separated) or GEMINI_API_KEY in your environment")
+        raise GeminiLLMError(
+            "Set GEMINI_API_KEYS (comma-separated) or GEMINI_API_KEY in your environment"
+        )
     return [k.strip() for k in raw.split(",") if k.strip()]
-```
-
-### Bài tập 5.3 — Error classification
-
-**Bối cảnh:** Khi gọi API bị lỗi, cần phân loại để biết xử lý thế nào:
-- Chứa "429", "quota", "rate limit" → `"quota"` (thử key tiếp)
-- Chứa "503", "500", "timeout", "unavailable" → `"transient"` (retry)
-- Chứa "not found", "does not exist" → `"model_not_found"` (thử model tiếp)
-- Còn lại → `"fatal"` (dừng)
-
-**Yêu cầu:** Viết `classify_error(exc: Exception) -> str` kiểm tra `str(exc).lower()` rồi trả loại lỗi. Test với các Exception khác nhau.
-
-**Đáp án:**
-
-```python
-def classify_error(exc: Exception) -> str:
-    err = str(exc).lower()
-    if any(m in err for m in ("429", "resource has been exhausted", "quota", "rate limit", "too many requests")):
-        return "quota"
-    if any(m in err for m in ("deadline", "unavailable", "internal", "timeout", "503", "500")):
-        return "transient"
-    if "not found" in err or "does not exist" in err or "invalid" in err:
-        return "model_not_found"
-    return "fatal"
 
 # Test
-assert classify_error(Exception("429 Too Many Requests")) == "quota"
-assert classify_error(Exception("resource has been exhausted")) == "quota"
-assert classify_error(Exception("503 Service Unavailable")) == "transient"
-assert classify_error(Exception("model gemini-3.0 not found")) == "model_not_found"
-assert classify_error(Exception("unexpected error XYZ")) == "fatal"
-print("OK!")
+import os
+os.environ["GEMINI_API_KEYS"] = "key1, key2, key3"
+assert _keys_from_env() == ["key1", "key2", "key3"]
+
+del os.environ["GEMINI_API_KEYS"]
+os.environ["GEMINI_API_KEY"] = "single_key"
+assert _keys_from_env() == ["single_key"]
+
+del os.environ["GEMINI_API_KEY"]
+try:
+    _keys_from_env()
+    assert False
+except GeminiLLMError as e:
+    print(f"OK: {e}")
 ```
 
-### Bài tập 5.4 — Per-call key iteration (giả lập, không cần API thật)
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 172-182 — code phải giống.
 
-**Bối cảnh:** Nhiều thread gọi API cùng lúc. Nếu dùng shared index (ví dụ `self._current_key_idx`) → race condition. Giải pháp: mỗi lần gọi, copy danh sách key ra biến local rồi iterate.
+### Bài tập 5.3 — `GeminiLabeler.__init__` + `_get_client` (dòng 42-75 trong dự án)
 
-**Yêu cầu:**
-1. Viết function `try_all_keys_and_models(keys, models, call_fn)`:
-   - `call_fn(key, model)` → trả kết quả hoặc raise exception.
-   - Duyệt qua từng model, trong mỗi model duyệt qua từng key.
-   - Nếu `call_fn` raise `QuotaError` → thử key tiếp.
-   - Nếu `call_fn` raise `ModelNotFoundError` → break, thử model tiếp.
-   - Nếu thành công → return kết quả.
-   - Hết tất cả → raise RuntimeError.
-2. Test với `fake_call` mà key1 bị quota, model1 bị not found ở key2, model2+key1 quota, model2+key2 thành công.
+**Bối cảnh:** Class `GeminiLabeler` cần:
+- `__init__`: nhận keys, model chain, generation params, override function. Nếu không truyền keys → gọi `_keys_from_env()`.
+- `_get_client`: cache `genai.Client` per key, thread-safe bằng `threading.Lock`. Import `genai` lazy (trong method, không ở đầu file) vì chỉ cần khi thật sự gọi API.
+
+**Yêu cầu:** Viết class `GeminiLabeler` với `__init__` và `_get_client` — code **đúng như dự án**:
+1. `__init__` nhận 4 keyword-only parameters: `api_keys`, `model_chain`, `params`, `override_callable`.
+2. `_get_client(api_key)`: dùng `threading.Lock`, lazy import `from google import genai`.
 
 **Đáp án:**
 
 ```python
-class QuotaError(Exception):
-    pass
+class GeminiLabeler:
+    """AI Studio labeler with key rotation and model fallback.
 
-class ModelNotFoundError(Exception):
-    pass
+    Each call to :meth:`generate` iterates over a **local copy** of the key
+    list so that concurrent threads (via ``asyncio.to_thread``) never share
+    mutable rotation state.  This avoids race conditions where one thread's
+    quota error cascades into marking other threads' keys as exhausted.
+    """
 
-def try_all_keys_and_models(keys, models, call_fn):
-    last_exc = None
-    for model in models:
-        for key in keys:
-            try:
-                return call_fn(key, model)
-            except QuotaError as e:
-                last_exc = e
-                continue  # thử key tiếp
-            except ModelNotFoundError as e:
-                last_exc = e
-                break  # thử model tiếp
-    raise RuntimeError(f"All models/keys exhausted. Last: {last_exc}")
+    def __init__(
+        self,
+        *,
+        api_keys: list[str] | None = None,
+        model_chain: list[str] | None = None,
+        params: GenerationParams | None = None,
+        override_callable: OverrideFn | None = None,
+    ) -> None:
+        raw_keys = api_keys or _keys_from_env()
+        if not raw_keys:
+            raise GeminiLLMError("No API keys provided for AI Studio labeling")
+        self._keys: list[str] = list(raw_keys)
+        self._model_chain = model_chain or list(DEFAULT_MODEL_CHAIN)
+        self.params = params or GenerationParams()
+        self._override = override_callable
+        self._clients: dict[str, Any] = {}
+        self._clients_lock = threading.Lock()
 
-# Test
-def fake_call(key, model):
-    if model == "m1" and key == "k1":
-        raise QuotaError("k1 quota exhausted")
-    if model == "m1" and key == "k2":
-        raise ModelNotFoundError("m1 not found")
-    if model == "m2" and key == "k1":
-        raise QuotaError("k1 quota exhausted")
-    if model == "m2" and key == "k2":
-        return f"Success with {model}+{key}"
-    raise RuntimeError("unexpected")
-
-result = try_all_keys_and_models(["k1", "k2"], ["m1", "m2"], fake_call)
-assert result == "Success with m2+k2"
-print(f"OK: {result}")
-```
-
-### Bài tập 5.5 — Thread-safe client cache
-
-**Bối cảnh:** Tạo `genai.Client` tốn thời gian. Cache client theo API key. Nhưng nhiều thread có thể gọi cùng lúc → dùng `threading.Lock` bảo vệ dict.
-
-**Yêu cầu:**
-1. Viết class `ClientCache`:
-   - `__init__`: tạo `_clients: dict = {}` và `_lock = threading.Lock()`.
-   - `get_client(api_key)`: lock → nếu key chưa có trong dict → tạo mới (giả lập bằng dict `{"key": api_key}`) → return.
-2. Test: gọi `get_client("k1")` 2 lần → trả cùng object (cache).
-
-**Đáp án:**
-
-```python
-import threading
-
-class ClientCache:
-    def __init__(self):
-        self._clients: dict[str, dict] = {}
-        self._lock = threading.Lock()
-
-    def get_client(self, api_key: str) -> dict:
-        with self._lock:
+    def _get_client(self, api_key: str) -> Any:
+        with self._clients_lock:
             if api_key not in self._clients:
-                # Giả lập: trong dự án thật dùng genai.Client(api_key=api_key)
-                self._clients[api_key] = {"key": api_key, "type": "genai.Client"}
+                from google import genai
+
+                self._clients[api_key] = genai.Client(api_key=api_key)
             return self._clients[api_key]
 
-# Test
-cache = ClientCache()
-c1 = cache.get_client("key_abc")
-c2 = cache.get_client("key_abc")
-assert c1 is c2  # cùng object (cache)
-c3 = cache.get_client("key_xyz")
-assert c3 is not c1  # key khác → object khác
-print("OK! Cache hoạt động.")
+# Test (không cần API key thật — dùng override)
+os.environ["GEMINI_API_KEYS"] = "fake_key1,fake_key2"
+labeler = GeminiLabeler(
+    api_keys=["k1", "k2"],
+    model_chain=["gemini-2.5-flash"],
+    override_callable=lambda sys, usr: '{"summary":"test","confidence":0.9}',
+)
+assert labeler._keys == ["k1", "k2"]
+assert labeler._model_chain == ["gemini-2.5-flash"]
+print("OK! GeminiLabeler created.")
 ```
 
-### Bài tập 5.6 — Retry với tenacity
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 42-75 — code phải giống.
 
-**Bối cảnh:** Lỗi transient (503, timeout) có thể tự hết sau vài giây. Dùng `tenacity` để retry tự động với exponential backoff (đợi 2s, 4s, 8s, ...).
+### Bài tập 5.4 — Error classification inline (dòng 119-161 trong dự án)
 
-**Yêu cầu:**
-1. Viết function `call_with_retry(fn)` dùng tenacity decorator:
-   - Chỉ retry `GeminiTransientError`.
-   - Exponential backoff: min=2s, max=60s.
-   - Tối đa 6 lần.
-   - `GeminiLLMError` → dừng ngay (không retry).
-2. Test: function fail 2 lần `GeminiTransientError` rồi thành công → phải trả kết quả.
+**Bối cảnh:** Trong method `generate()`, khi bắt `except Exception`, dự án phân loại lỗi **inline** (không gọi function riêng). Logic:
+1. Tạo `err = str(exc).lower()`
+2. Check `is_quota` bằng `any(m in err for m in ("429", "resource has been exhausted", ...))` → `continue` (thử key tiếp)
+3. Check `is_transient` → `raise GeminiTransientError` (tenacity sẽ retry)
+4. Check model not found → `break` (thử model tiếp)
+5. Còn lại → `raise GeminiLLMError` (fatal)
+
+**Yêu cầu:** Viết function giả lập `handle_error(exc, model_name, key_idx, total_keys)` trả string action (`"continue"`, `"raise_transient"`, `"break"`, `"raise_fatal"`), dùng **đúng các chuỗi check** trong dự án.
+
+**Đáp án:**
+
+```python
+def handle_error(exc: Exception, model_name: str, key_idx: int, total_keys: int) -> str:
+    """Giả lập logic error handling trong generate() — dòng 119-161 dự án."""
+    err = str(exc).lower()
+
+    # Dòng 123-133: quota check
+    is_quota = any(
+        m in err
+        for m in (
+            "429",
+            "resource has been exhausted",
+            "quota",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+        )
+    )
+
+    # Dòng 134-143: transient check
+    is_transient = any(
+        m in err
+        for m in (
+            "deadline",
+            "unavailable",
+            "internal",
+            "timeout",
+            "503",
+            "500",
+        )
+    )
+
+    if is_quota:
+        # Dòng 145-154: log warning, last_exc = exc, continue
+        print(f"Key #{key_idx + 1}/{total_keys} quota hit on {model_name}: {exc}")
+        return "continue"
+    if is_transient:
+        # Dòng 155-156: raise GeminiTransientError
+        return "raise_transient"
+    if "not found" in err or "does not exist" in err or "invalid" in err:
+        # Dòng 157-160: log warning, break (thử model tiếp)
+        print(f"Model {model_name} not available: {exc}")
+        return "break"
+    # Dòng 161: raise GeminiLLMError (fatal)
+    return "raise_fatal"
+
+# Test — đúng các trường hợp trong dự án
+assert handle_error(Exception("429 Too Many Requests"), "gemini-2.5-flash", 0, 3) == "continue"
+assert handle_error(Exception("resource has been exhausted"), "gemini-2.5-flash", 1, 3) == "continue"
+assert handle_error(Exception("503 Service Unavailable"), "gemini-2.5-flash", 0, 3) == "raise_transient"
+assert handle_error(Exception("deadline exceeded"), "gemini-2.5-flash", 0, 3) == "raise_transient"
+assert handle_error(Exception("model gemini-3.0 not found"), "gemini-2.5-flash", 0, 3) == "break"
+assert handle_error(Exception("does not exist"), "gemini-2.5-flash", 0, 3) == "break"
+assert handle_error(Exception("invalid model"), "gemini-2.5-flash", 0, 3) == "break"
+assert handle_error(Exception("unknown fatal error"), "gemini-2.5-flash", 0, 3) == "raise_fatal"
+print("OK! Tất cả error classification đúng.")
+```
+
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 119-161 — logic phải giống.
+
+### Bài tập 5.5 — `generate()` method hoàn chỉnh (dòng 77-169 trong dự án)
+
+**Bối cảnh:** Method `generate()` là trái tim của `GeminiLabeler`. Nó:
+1. Check override (nếu có → trả kết quả ngay, không gọi API)
+2. Copy `self._keys` và `self._model_chain` ra biến local (thread-safe)
+3. Nested loop: `for model_name in models` → `for key_idx, api_key in enumerate(keys)`
+4. Gọi API: `client.models.generate_content(...)` với config từ `self.params`
+5. Error handling inline (bài 5.4)
+6. `for...else` pattern: nếu tất cả keys bị quota cho 1 model → `else: continue` → thử model tiếp
+7. Hết tất cả → `raise GeminiLLMError`
+8. `@retry` decorator từ tenacity: chỉ retry `GeminiTransientError`, exponential backoff 2-60s, tối đa 6 lần
+
+**Yêu cầu:** Thêm method `generate(self, *, system: str, user: str) -> str` vào class `GeminiLabeler` — code **đúng như dự án**. Dùng `@retry` decorator.
+
+**Gợi ý về `for...else` pattern:**
+```python
+for key in keys:
+    try:
+        return call(key)  # thành công → return
+    except QuotaError:
+        continue          # thử key tiếp
+else:
+    # Block else chạy khi for loop kết thúc KHÔNG bị break
+    # Tức là tất cả keys đều bị quota → continue outer loop (thử model tiếp)
+    continue
+```
 
 **Đáp án:**
 
 ```python
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-attempt_count = 0
+# Method này nằm trong class GeminiLabeler:
 
-@retry(
-    reraise=True,
-    retry=retry_if_exception_type(GeminiTransientError),
-    wait=wait_exponential(multiplier=0.01, min=0.01, max=0.1),  # nhanh cho test
-    stop=stop_after_attempt(6),
+    @retry(
+        reraise=True,
+        retry=retry_if_exception_type(GeminiTransientError),
+        wait=wait_exponential(multiplier=1, min=2, max=60),
+        stop=stop_after_attempt(6),
+    )
+    def generate(self, *, system: str, user: str) -> str:
+        """Generate a label using AI Studio.
+
+        Key rotation and model fallback are handled per-call using local
+        iteration over snapshot copies of keys and models.  This is safe
+        for concurrent use from multiple threads.
+        """
+        if self._override is not None:
+            return self._override(system, user)
+
+        from google.genai import types
+
+        keys = list(self._keys)
+        models = list(self._model_chain)
+        last_exc: Exception | None = None
+
+        for model_name in models:
+            for key_idx, api_key in enumerate(keys):
+                client = self._get_client(api_key)
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=f"{system}\n\n{user}",
+                        config=types.GenerateContentConfig(
+                            temperature=self.params.temperature,
+                            top_p=self.params.top_p,
+                            max_output_tokens=self.params.max_output_tokens,
+                            response_mime_type=self.params.response_mime_type,
+                        ),
+                    )
+                    text = response.text
+                    if text is None:
+                        raise GeminiLLMError(
+                            f"empty/blocked response from {model_name}"
+                        )
+                    return str(text)
+                except GeminiLLMError:
+                    raise
+                except Exception as exc:
+                    err = str(exc).lower()
+                    is_quota = any(
+                        m in err
+                        for m in (
+                            "429",
+                            "resource has been exhausted",
+                            "quota",
+                            "rate limit",
+                            "rate_limit",
+                            "too many requests",
+                        )
+                    )
+                    is_transient = any(
+                        m in err
+                        for m in (
+                            "deadline",
+                            "unavailable",
+                            "internal",
+                            "timeout",
+                            "503",
+                            "500",
+                        )
+                    )
+                    if is_quota:
+                        log.warning(
+                            "Key #%d/%d quota hit on %s: %s",
+                            key_idx + 1,
+                            len(keys),
+                            model_name,
+                            exc,
+                        )
+                        last_exc = exc
+                        continue
+                    if is_transient:
+                        raise GeminiTransientError(str(exc)) from exc
+                    if "not found" in err or "does not exist" in err or "invalid" in err:
+                        log.warning("Model %s not available, trying next: %s", model_name, exc)
+                        last_exc = exc
+                        break
+                    raise GeminiLLMError(str(exc)) from exc
+            else:
+                last_exc = last_exc or RuntimeError(f"All keys exhausted for {model_name}")
+                continue
+            continue
+
+        raise GeminiLLMError(
+            f"All models/keys exhausted. Last error: {last_exc}"
+        )
+
+# Test (dùng override — không cần API thật)
+labeler = GeminiLabeler(
+    api_keys=["fake"],
+    override_callable=lambda sys, usr: '{"summary":"test","confidence":0.9}',
 )
-def call_with_retry():
-    global attempt_count
-    attempt_count += 1
-    if attempt_count <= 2:
-        raise GeminiTransientError(f"503 at attempt {attempt_count}")
-    return "Success!"
-
-attempt_count = 0
-result = call_with_retry()
-assert result == "Success!"
-assert attempt_count == 3
-print(f"OK! Retry {attempt_count - 1} lần rồi thành công.")
+result = labeler.generate(system="You are a journalist.", user="Summarize this.")
+assert result == '{"summary":"test","confidence":0.9}'
+print(f"OK! generate() trả: {result}")
 ```
+
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 77-169 — code phải giống.
 
 ### 🎯 Bài cuối chặng 5 — Code lại `labeling/gemini_labeler.py`
 
-**Yêu cầu:** Tạo file `labeling/gemini_labeler.py` (182 dòng) gồm:
-- Module docstring
-- `DEFAULT_MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.0-flash"]`
-- `GeminiLLMError`, `GeminiTransientError` exception classes
-- `OverrideFn` type alias: `Callable[[str, str], str]`
-- `GeminiLabeler` class:
-  - `__init__` (api_keys, model_chain, params, override_callable)
-  - `_get_client` (thread-safe)
-  - `generate` (tenacity retry, per-call local iteration, error classification, `except GeminiLLMError: raise` trước `except Exception`)
-- `_keys_from_env()` function
+**Yêu cầu:** Ghép bài 5.1 + 5.2 + 5.3 + 5.5 thành file `labeling/gemini_labeler.py` hoàn chỉnh (182 dòng). Bỏ phần test, chỉ giữ code.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""Google AI Studio (Gemini) client with multi-key rotation for labeling.
+
+Labeling runs on free AI Studio API keys.  Multiple keys can be supplied
+(comma-separated in the env-var or passed as a list) so that when one key
+hits a rate / quota limit the next key is tried automatically.
+
+Model fallback order (configurable):
+    gemini-2.5-flash  →  gemini-2.0-flash
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+from collections.abc import Callable
+from typing import Any
+
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from labeling.prompt import GenerationParams
+
+log = logging.getLogger(__name__)
+
+DEFAULT_MODEL_CHAIN: list[str] = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+]
+
+
+class GeminiLLMError(RuntimeError):
+    """Unrecoverable error from AI Studio."""
+
+
+class GeminiTransientError(RuntimeError):
+    """Retryable error (rate-limit, timeout, transient server error)."""
+
+
+OverrideFn = Callable[[str, str], str]
+
+
+class GeminiLabeler:
+    """AI Studio labeler with key rotation and model fallback.
+
+    Each call to :meth:`generate` iterates over a **local copy** of the key
+    list so that concurrent threads (via ``asyncio.to_thread``) never share
+    mutable rotation state.  This avoids race conditions where one thread's
+    quota error cascades into marking other threads' keys as exhausted.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_keys: list[str] | None = None,
+        model_chain: list[str] | None = None,
+        params: GenerationParams | None = None,
+        override_callable: OverrideFn | None = None,
+    ) -> None:
+        raw_keys = api_keys or _keys_from_env()
+        if not raw_keys:
+            raise GeminiLLMError("No API keys provided for AI Studio labeling")
+        self._keys: list[str] = list(raw_keys)
+        self._model_chain = model_chain or list(DEFAULT_MODEL_CHAIN)
+        self.params = params or GenerationParams()
+        self._override = override_callable
+        self._clients: dict[str, Any] = {}
+        self._clients_lock = threading.Lock()
+
+    def _get_client(self, api_key: str) -> Any:
+        with self._clients_lock:
+            if api_key not in self._clients:
+                from google import genai
+
+                self._clients[api_key] = genai.Client(api_key=api_key)
+            return self._clients[api_key]
+
+    @retry(
+        reraise=True,
+        retry=retry_if_exception_type(GeminiTransientError),
+        wait=wait_exponential(multiplier=1, min=2, max=60),
+        stop=stop_after_attempt(6),
+    )
+    def generate(self, *, system: str, user: str) -> str:
+        """Generate a label using AI Studio.
+
+        Key rotation and model fallback are handled per-call using local
+        iteration over snapshot copies of keys and models.  This is safe
+        for concurrent use from multiple threads.
+        """
+        if self._override is not None:
+            return self._override(system, user)
+
+        from google.genai import types
+
+        keys = list(self._keys)
+        models = list(self._model_chain)
+        last_exc: Exception | None = None
+
+        for model_name in models:
+            for key_idx, api_key in enumerate(keys):
+                client = self._get_client(api_key)
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=f"{system}\n\n{user}",
+                        config=types.GenerateContentConfig(
+                            temperature=self.params.temperature,
+                            top_p=self.params.top_p,
+                            max_output_tokens=self.params.max_output_tokens,
+                            response_mime_type=self.params.response_mime_type,
+                        ),
+                    )
+                    text = response.text
+                    if text is None:
+                        raise GeminiLLMError(
+                            f"empty/blocked response from {model_name}"
+                        )
+                    return str(text)
+                except GeminiLLMError:
+                    raise
+                except Exception as exc:
+                    err = str(exc).lower()
+                    is_quota = any(
+                        m in err
+                        for m in (
+                            "429",
+                            "resource has been exhausted",
+                            "quota",
+                            "rate limit",
+                            "rate_limit",
+                            "too many requests",
+                        )
+                    )
+                    is_transient = any(
+                        m in err
+                        for m in (
+                            "deadline",
+                            "unavailable",
+                            "internal",
+                            "timeout",
+                            "503",
+                            "500",
+                        )
+                    )
+                    if is_quota:
+                        log.warning(
+                            "Key #%d/%d quota hit on %s: %s",
+                            key_idx + 1,
+                            len(keys),
+                            model_name,
+                            exc,
+                        )
+                        last_exc = exc
+                        continue
+                    if is_transient:
+                        raise GeminiTransientError(str(exc)) from exc
+                    if "not found" in err or "does not exist" in err or "invalid" in err:
+                        log.warning("Model %s not available, trying next: %s", model_name, exc)
+                        last_exc = exc
+                        break
+                    raise GeminiLLMError(str(exc)) from exc
+            else:
+                last_exc = last_exc or RuntimeError(f"All keys exhausted for {model_name}")
+                continue
+            continue
+
+        raise GeminiLLMError(
+            f"All models/keys exhausted. Last error: {last_exc}"
+        )
+
+
+def _keys_from_env() -> list[str]:
+    """Read comma-separated API keys from ``GEMINI_API_KEYS``."""
+    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
+    if not raw:
+        single = os.environ.get("GEMINI_API_KEY", "").strip()
+        if single:
+            return [single]
+        raise GeminiLLMError(
+            "Set GEMINI_API_KEYS (comma-separated) or GEMINI_API_KEY in your environment"
+        )
+    return [k.strip() for k in raw.split(",") if k.strip()]
+```
 
 **Kiểm tra:** So với `labeling/gemini_labeler.py` trong dự án — phải giống 100%.
 
@@ -1662,13 +2524,145 @@ async def _label_one(row, *, labeler, semaphore):
 
 ### 🎯 Bài cuối chặng 6 — Code lại `labeling/label_dataset.py`
 
-**Yêu cầu:** Tạo file `labeling/label_dataset.py` (133 dòng) gồm:
-- `read_jsonl`, `write_jsonl` functions
-- `_label_one(row, labeler, semaphore)` async function
-- `label_rows(rows, concurrency, limit, labeler)` async function
-- `_build_parser()` → argparse (--input, --output, --limit, --concurrency)
-- `_run_cli(args)` async function
-- `main(argv)` function (bắt KeyboardInterrupt)
+**Yêu cầu:** Tạo file `labeling/label_dataset.py` (133 dòng) gồm tất cả phần trên.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""Label crawled JSONL articles with Gemini (AI Studio) and deterministic QC."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from labeling.prompt import (
+    PROMPT_MODEL,
+    PROMPT_VERSION,
+    SYSTEM_PROMPT,
+    GenerationParams,
+    parse_label_json,
+    render_user_prompt,
+)
+from labeling.qc import run_qc
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False))
+            fh.write("\n")
+
+
+async def _label_one(
+    row: dict[str, Any],
+    *,
+    labeler: GeminiLabeler,
+    semaphore: asyncio.Semaphore,
+) -> dict[str, Any]:
+    user_prompt = render_user_prompt(
+        title=str(row.get("title") or ""),
+        category=str(row.get("category") or ""),
+        source=str(row.get("source") or ""),
+        content_text=str(row.get("content_text") or ""),
+    )
+    try:
+        async with semaphore:
+            raw = await asyncio.to_thread(labeler.generate, system=SYSTEM_PROMPT, user=user_prompt)
+        output = parse_label_json(raw)
+        qc = run_qc(
+            output=output,
+            source_text=f"{row.get('title') or ''} {row.get('content_text') or ''}",
+        )
+        return {
+            **row,
+            "summary": output.summary.strip(),
+            "key_entities": output.key_entities,
+            "confidence": output.confidence,
+            "refusal_reason": output.refusal_reason,
+            "prompt_version": PROMPT_VERSION,
+            "qc_passed": qc.passed,
+            "qc_details": qc.to_dict(),
+        }
+    except (GeminiLLMError, GeminiTransientError, ValueError) as exc:
+        return {
+            **row,
+            "summary": "",
+            "key_entities": [],
+            "confidence": 0.0,
+            "refusal_reason": str(exc),
+            "prompt_version": PROMPT_VERSION,
+            "qc_passed": False,
+            "qc_details": {"passed": False, "reasons": [f"label_error:{exc}"]},
+        }
+
+
+async def label_rows(
+    rows: list[dict[str, Any]],
+    *,
+    concurrency: int = 5,
+    limit: int | None = None,
+    labeler: GeminiLabeler | None = None,
+) -> list[dict[str, Any]]:
+    if labeler is None:
+        labeler = GeminiLabeler(params=GenerationParams())
+    semaphore = asyncio.Semaphore(max(concurrency, 1))
+    work = rows[:limit] if limit is not None else rows
+    tasks = [_label_one(row, labeler=labeler, semaphore=semaphore) for row in work]
+    return list(await asyncio.gather(*tasks))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Label crawled articles with Gemini")
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--concurrency", type=int, default=5)
+    return parser
+
+
+async def _run_cli(args: argparse.Namespace) -> int:
+    rows = read_jsonl(args.input)
+    labeled = await label_rows(
+        rows, concurrency=args.concurrency, limit=args.limit
+    )
+    write_jsonl(args.output, labeled)
+    passed = sum(1 for row in labeled if row.get("qc_passed") is True)
+    print(
+        f"labeled={len(labeled)} qc_passed={passed} qc_failed={len(labeled) - passed} "
+        f"prompt={PROMPT_VERSION} model={PROMPT_MODEL}"
+    )
+    return 0 if labeled else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    try:
+        return asyncio.run(_run_cli(args))
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
 
 **Kiểm tra:** So với `labeling/label_dataset.py` trong dự án — phải giống 100%.
 
@@ -1677,6 +2671,8 @@ async def _label_one(row, *, labeler, semaphore):
 ## Chặng 6B — Batch Labeling với Rate Limit (`labeling/batch_labeler.py`)
 
 **Mục tiêu:** hiểu rate limiting, key rotation, resumable processing, ước tính tài nguyên. Code lại `labeling/batch_labeler.py`.
+
+Mỗi bài tập xây dựng **đúng một phần** của file `labeling/batch_labeler.py` trong dự án.
 
 ### Lý thuyết
 
@@ -1689,10 +2685,10 @@ Chặng 6 dùng `asyncio.gather` gọi đồng thời — hoạt động tốt v
 Với 2810 bài, nếu gọi không kiểm soát → bị block ngay. Cần batch labeler thông minh.
 
 **2. Chiến lược:**
-- **Delay giữa requests:** `60 / RPM = 4 giây` → đảm bảo không vượt 15 RPM.
-- **Key rotation round-robin:** phân bổ đều requests qua các key (project khác nhau).
-- **Daily budget tracking:** mỗi key tối đa 450 req/ngày (safe margin < 500 RPD).
-- **Resumable:** ghi kết quả từng dòng, restart tự skip bài đã xong.
+- **Delay giữa requests:** `60 / RPM = 4 giây` → đảm bảo không vượt 15 RPM. Dự án dùng 4.5s (safe margin).
+- **Key rotation round-robin:** phân bổ đều requests qua các key (project khác nhau). Dùng `counts = [0] * len(keys)` để track usage per key.
+- **Daily budget per key:** tối đa 450 req/ngày (safe margin < 500 RPD).
+- **Resumable:** ghi kết quả từng dòng (append), restart tự skip bài đã xong.
 
 **3. Ước tính tài nguyên:**
 ```
@@ -1702,98 +2698,96 @@ Nếu 9 keys: 9 × 450 = 4,050 req/ngày → label hết trong 1 ngày
 Thời gian chạy: 2810 × 4.5s delay ≈ 3.5 giờ
 ```
 
-**4. `dataclass` cho config:**
-```python
-@dataclass(slots=True)
-class BatchConfig:
-    delay_between_requests: float = 4.5
-    max_per_key_per_day: int = 450
-```
-
-**5. Incremental write (append mode):**
+**4. Incremental write (append mode):**
 ```python
 # Ghi từng row ngay khi xong — không mất dữ liệu nếu crash
 with path.open("a", encoding="utf-8") as fh:  # "a" = append
     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 ```
 
-### Bài tập 6B.1 — KeyUsageTracker
-
-**Bối cảnh:** Mỗi key có budget 450 req/ngày. Cần track đã dùng bao nhiêu và tìm key còn quota.
-
-**Yêu cầu:**
-1. Tạo `KeyUsageTracker` dataclass với:
-   - `daily_counts: dict[str, int]` — đếm số lần dùng mỗi key (key=index dạng str).
-   - `budget_per_key: int = 450`.
-2. Method `can_use(key_index: int) -> bool`: True nếu chưa vượt budget.
-3. Method `record_use(key_index: int)`: tăng count.
-4. Method `get_next_available(total_keys, start) -> int | None`: round-robin tìm key còn quota.
-5. Method `total_remaining(total_keys) -> int`: tổng capacity còn lại.
-6. Test: 3 keys, budget=2, dùng hết key 0 → `get_next_available` trả key 1.
-
-**Đáp án:**
-
+**5. Key rotation bằng list đơn giản:**
 ```python
-from dataclasses import dataclass, field
+# Track usage per key: counts[i] = requests used by key i
+counts = [0] * len(keys)
+current = 0  # next key to try
 
-@dataclass
-class KeyUsageTracker:
-    daily_counts: dict[str, int] = field(default_factory=dict)
-    budget_per_key: int = 450
-
-    def can_use(self, key_index: int) -> bool:
-        return self.daily_counts.get(str(key_index), 0) < self.budget_per_key
-
-    def record_use(self, key_index: int) -> None:
-        k = str(key_index)
-        self.daily_counts[k] = self.daily_counts.get(k, 0) + 1
-
-    def get_next_available(self, total_keys: int, start: int = 0) -> int | None:
-        for offset in range(total_keys):
-            idx = (start + offset) % total_keys
-            if self.can_use(idx):
-                return idx
-        return None
-
-    def total_remaining(self, total_keys: int) -> int:
-        return sum(
-            self.budget_per_key - self.daily_counts.get(str(i), 0)
-            for i in range(total_keys)
-        )
-
-# Test
-tracker = KeyUsageTracker(budget_per_key=2)
-tracker.record_use(0)
-tracker.record_use(0)
-assert not tracker.can_use(0)  # key 0 đã hết budget
-assert tracker.can_use(1)      # key 1 còn
-assert tracker.get_next_available(3, start=0) == 1  # skip key 0, trả key 1
-assert tracker.total_remaining(3) == 4  # key1: 2 + key2: 2 = 4
-print("OK!")
+# Tìm key còn budget (round-robin)
+for _ in range(len(keys)):
+    if counts[current] < max_per_key:
+        key_idx = current
+        current = (current + 1) % len(keys)
+        break
+    current = (current + 1) % len(keys)
 ```
 
-### Bài tập 6B.2 — Resume: load existing article_ids
+### Bài tập 6B.1 — Constants, imports, I/O helpers (dòng 1-77 trong dự án)
 
-**Bối cảnh:** Nếu script crash giữa chừng (mất mạng, Ctrl+C), khi chạy lại cần skip bài đã label. Đọc output JSONL lấy tất cả `article_id` đã có.
+**Bối cảnh:** Phần đầu `batch_labeler.py` gồm: docstring, imports, 3 constants, và 3 I/O helpers giống các bài trước nhưng thêm `_load_done_ids` (resume) và `_append_jsonl` (incremental write).
 
 **Yêu cầu:**
-1. Viết `_load_existing_ids(output_path: Path) -> set[int]`:
-   - Nếu file không tồn tại → trả `set()`.
-   - Đọc mỗi dòng, parse JSON, lấy `article_id`, thêm vào set.
-   - Nếu dòng bị lỗi JSON → skip (file có thể bị cắt giữa chừng).
-2. Test: ghi 3 dòng JSONL, đọc lại, assert trả đúng 3 ids.
+1. Viết module docstring giải thích: free-tier limits, strategy (delay, rotate, resume).
+2. Import đúng như dự án (bao gồm import từ `labeling.gemini_labeler`, `labeling.prompt`, `labeling.qc`).
+3. Tạo 3 constants: `MODEL`, `DELAY`, `MAX_PER_KEY`.
+4. Viết 3 I/O functions: `read_jsonl`, `_load_done_ids`, `_append_jsonl` — code **đúng như dự án**.
 
 **Đáp án:**
 
 ```python
-import json
-from pathlib import Path
+"""Batch labeling with gemini-3.1-flash-lite and multi-key rotation.
 
-def _load_existing_ids(output_path: Path) -> set[int]:
-    if not output_path.exists():
+Free-tier limits (gemini-3.1-flash-lite):
+    15 RPM  |  500 RPD/project  |  250K TPM
+
+Strategy:
+    - Delay 4.5s between requests → safe for 15 RPM
+    - Rotate keys round-robin → spread RPD across projects
+    - Write results incrementally → resumable on crash
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
+from labeling.prompt import (
+    PROMPT_VERSION,
+    SYSTEM_PROMPT,
+    GenerationParams,
+    parse_label_json,
+    render_user_prompt,
+)
+from labeling.qc import run_qc
+
+log = logging.getLogger(__name__)
+
+MODEL = "gemini-3.1-flash-lite"
+DELAY = 4.5           # seconds between requests (safe for 15 RPM)
+MAX_PER_KEY = 450     # conservative daily budget per key (< 500 RPD)
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def _load_done_ids(path: Path) -> set[int]:
+    """Load article_ids already in output file (for resume)."""
+    if not path.exists():
         return set()
     ids: set[int] = set()
-    with output_path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:
@@ -1802,97 +2796,214 @@ def _load_existing_ids(output_path: Path) -> set[int]:
                     if "article_id" in row:
                         ids.add(row["article_id"])
                 except json.JSONDecodeError:
-                    continue  # skip dòng bị lỗi
+                    continue
     return ids
 
-# Test
-test_path = Path("/tmp/test_resume.jsonl")
-test_path.write_text(
-    '{"article_id": 1, "summary": "A"}\n'
-    '{"article_id": 5, "summary": "B"}\n'
-    '{"article_id": 10, "summary": "C"}\n'
-    'invalid json line\n',  # dòng lỗi — phải skip
-    encoding="utf-8",
-)
-ids = _load_existing_ids(test_path)
-assert ids == {1, 5, 10}
-assert _load_existing_ids(Path("/tmp/nonexistent.jsonl")) == set()
-print("OK!")
-```
 
-### Bài tập 6B.3 — Incremental append JSONL
-
-**Bối cảnh:** Thay vì ghi tất cả cuối cùng (mất hết nếu crash), ghi ngay mỗi kết quả.
-
-**Yêu cầu:**
-1. Viết `_append_jsonl(path: Path, row: dict)`:
-   - Tạo thư mục cha nếu chưa có.
-   - Mở file mode `"a"` (append), ghi 1 dòng JSON + `"\n"`.
-2. Test: append 3 rows, đọc lại file, assert có 3 dòng đúng.
-
-**Đáp án:**
-
-```python
-def _append_jsonl(path: Path, row: dict) -> None:
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    """Append one JSON row to file (incremental write)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False))
-        fh.write("\n")
-
-# Test
-out = Path("/tmp/test_append.jsonl")
-out.unlink(missing_ok=True)
-_append_jsonl(out, {"article_id": 1, "summary": "Tin A"})
-_append_jsonl(out, {"article_id": 2, "summary": "Tin B"})
-_append_jsonl(out, {"article_id": 3, "summary": "Tin C"})
-
-lines = out.read_text(encoding="utf-8").strip().split("\n")
-assert len(lines) == 3
-assert json.loads(lines[0])["article_id"] == 1
-assert json.loads(lines[2])["summary"] == "Tin C"
-print("OK!")
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 ```
 
-### Bài tập 6B.4 — asyncio.sleep cho rate limiting
+**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 1-77 — code phải giống.
 
-**Bối cảnh:** Free tier cho 15 RPM. Delay 4.5s giữa requests đảm bảo ~13 req/phút (safe margin). Dùng `await asyncio.sleep(delay)` để không block event loop.
+### Bài tập 6B.2 — `_label_one()` (dòng 85-122 trong dự án)
 
-**Yêu cầu:**
-1. Viết async function `rate_limited_calls(items, delay)`:
-   - Lặp qua items, mỗi item gọi 1 async task giả lập.
-   - `await asyncio.sleep(delay)` giữa mỗi call.
-   - Trả list kết quả.
-2. Đo thời gian: 5 items, delay=0.5s → tổng >= 2.0s (4 delays).
+**Bối cảnh:** Giống `_label_one` ở chặng 6, nhưng đơn giản hơn (không cần semaphore vì batch labeler gọi tuần tự, delay giữa requests). Nếu lỗi → trả dict với `qc_passed=False` thay vì crash.
+
+**Yêu cầu:** Viết `_label_one(article, labeler)` — code **đúng như dự án**.
 
 **Đáp án:**
 
 ```python
-import asyncio
-import time
-
-async def fake_api_call(item: str) -> str:
-    await asyncio.sleep(0.05)  # giả lập API latency
-    return f"result:{item}"
-
-async def rate_limited_calls(items: list[str], delay: float) -> list[str]:
-    results = []
-    for item in items:
-        result = await fake_api_call(item)
-        results.append(result)
-        await asyncio.sleep(delay)  # rate limit delay
-    return results
-
-async def main():
-    items = [f"article_{i}" for i in range(5)]
-    start = time.monotonic()
-    results = await rate_limited_calls(items, delay=0.5)
-    elapsed = time.monotonic() - start
-    assert len(results) == 5
-    assert elapsed >= 2.0  # 5 items × 0.5s delay (cuối cùng cũng delay)
-    print(f"5 items in {elapsed:.2f}s (rate limited). OK!")
-
-asyncio.run(main())
+async def _label_one(article: dict[str, Any], labeler: GeminiLabeler) -> dict[str, Any]:
+    """Label a single article. Returns result dict (never raises)."""
+    user_prompt = render_user_prompt(
+        title=str(article.get("title") or ""),
+        category=str(article.get("category") or ""),
+        source=str(article.get("source") or ""),
+        content_text=str(article.get("content_text") or ""),
+    )
+    try:
+        raw = await asyncio.to_thread(
+            labeler.generate, system=SYSTEM_PROMPT, user=user_prompt
+        )
+        output = parse_label_json(raw)
+        qc = run_qc(
+            output=output,
+            source_text=f"{article.get('title') or ''} {article.get('content_text') or ''}",
+        )
+        return {
+            **article,
+            "summary": output.summary.strip(),
+            "key_entities": output.key_entities,
+            "confidence": output.confidence,
+            "refusal_reason": output.refusal_reason,
+            "prompt_version": PROMPT_VERSION,
+            "qc_passed": qc.passed,
+            "qc_details": qc.to_dict(),
+        }
+    except (GeminiLLMError, GeminiTransientError, ValueError) as exc:
+        return {
+            **article,
+            "summary": "",
+            "key_entities": [],
+            "confidence": 0.0,
+            "refusal_reason": str(exc),
+            "prompt_version": PROMPT_VERSION,
+            "qc_passed": False,
+            "qc_details": {"passed": False, "reasons": [f"label_error:{exc}"]},
+        }
 ```
+
+**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 85-122 — code phải giống.
+
+### Bài tập 6B.3 — `batch_label()` core logic (dòng 125-197 trong dự án)
+
+**Bối cảnh:** Function chính — đọc articles, skip đã done, rotate keys round-robin, gọi `_label_one`, ghi incremental, log progress. Key rotation dùng `counts = [0] * len(keys)` (list đơn giản, không cần class riêng).
+
+**Yêu cầu:** Viết `batch_label()` — code **đúng như dự án**.
+
+**Đáp án:**
+
+```python
+async def batch_label(
+    input_path: Path,
+    output_path: Path,
+    *,
+    api_keys: list[str] | None = None,
+    limit: int | None = None,
+    delay: float = DELAY,
+    max_per_key: int = MAX_PER_KEY,
+) -> dict[str, Any]:
+    """Label articles sequentially with key rotation.
+
+    - Resumable: skips article_ids already in output file.
+    - Incremental: writes each result immediately.
+    - Round-robin: rotates keys to spread daily quota.
+    """
+    keys = api_keys or _keys_from_env()
+
+    all_articles = read_jsonl(input_path)
+    done_ids = _load_done_ids(output_path)
+    pending = [a for a in all_articles if a.get("article_id") not in done_ids]
+    if limit is not None:
+        pending = pending[:limit]
+
+    if not pending:
+        log.info("Nothing to process — all articles already labeled.")
+        return {"processed": 0, "already_done": len(done_ids)}
+
+    # Track usage per key: counts[i] = requests used by key i
+    counts = [0] * len(keys)
+    current = 0
+    processed = 0
+    qc_passed = 0
+    start = time.time()
+
+    log.info("Batch: %d pending, %d keys, model=%s, delay=%.1fs",
+             len(pending), len(keys), MODEL, delay)
+
+    for article in pending:
+        # Find next key with budget remaining (round-robin)
+        key_idx = None
+        for _ in range(len(keys)):
+            if counts[current] < max_per_key:
+                key_idx = current
+                current = (current + 1) % len(keys)
+                break
+            current = (current + 1) % len(keys)
+
+        if key_idx is None:
+            log.warning("All keys exhausted daily budget. Stopping.")
+            break
+
+        labeler = GeminiLabeler(
+            api_keys=[keys[key_idx]],
+            model_chain=[MODEL],
+            params=GenerationParams(),
+        )
+        result = await _label_one(article, labeler)
+        _append_jsonl(output_path, result)
+        counts[key_idx] += 1
+        processed += 1
+
+        if result.get("qc_passed"):
+            qc_passed += 1
+
+        if processed % 10 == 0:
+            remaining = sum(max_per_key - c for c in counts)
+            log.info("Progress: %d/%d | qc_pass=%d | remaining=%d",
+                     processed, len(pending), qc_passed, remaining)
+
+        await asyncio.sleep(delay)
+
+    elapsed = time.time() - start
+    return {
+        "model": MODEL,
+        "total": len(all_articles),
+        "already_done": len(done_ids),
+        "processed": processed,
+        "qc_passed": qc_passed,
+        "elapsed_s": round(elapsed, 1),
+    }
+```
+
+**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 125-197 — code phải giống.
+
+### Bài tập 6B.4 — `_keys_from_env()` + `main()` CLI (dòng 203-255 trong dự án)
+
+**Bối cảnh:** `_keys_from_env()` giống chặng 5. CLI dùng argparse với 5 arguments: `--input`, `--output`, `--limit`, `--delay`, `--max-per-key`.
+
+**Yêu cầu:** Viết `_keys_from_env()` và `main()` — code **đúng như dự án**.
+
+**Đáp án:**
+
+```python
+def _keys_from_env() -> list[str]:
+    """Read comma-separated API keys from GEMINI_API_KEYS."""
+    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
+    if not raw:
+        single = os.environ.get("GEMINI_API_KEY", "").strip()
+        if single:
+            return [single]
+        raise GeminiLLMError("Set GEMINI_API_KEYS or GEMINI_API_KEY")
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Batch label with gemini-3.1-flash-lite")
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--delay", type=float, default=DELAY)
+    parser.add_argument("--max-per-key", type=int, default=MAX_PER_KEY)
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    async def _run() -> int:
+        summary = await batch_label(
+            args.input, args.output,
+            limit=args.limit, delay=args.delay, max_per_key=args.max_per_key,
+        )
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0 if summary.get("processed", 0) > 0 or summary.get("already_done", 0) > 0 else 1
+
+    try:
+        return asyncio.run(_run())
+    except KeyboardInterrupt:
+        print("\ninterrupted")
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 203-255 — code phải giống.
 
 ### Bài tập 6B.5 — Ước tính tài nguyên
 
@@ -1940,15 +3051,267 @@ print("OK!")
 
 ### 🎯 Bài cuối chặng 6B — Code lại `labeling/batch_labeler.py`
 
-**Yêu cầu:** Tạo file `labeling/batch_labeler.py` gồm:
-- Constants: `MODEL = "gemini-3.1-flash-lite"`, `SAFE_DELAY = 4.5`, `SAFE_RPD_BUDGET = 450`
-- `BatchConfig` dataclass (2 fields: delay_between_requests, max_per_key_per_day)
-- `KeyUsageTracker` dataclass (4 methods: can_use, record_use, get_next_available, total_remaining)
-- `read_jsonl`, `_load_existing_ids`, `_append_jsonl` I/O helpers
-- `_label_one(article, labeler)` async function
-- `batch_label(input_path, output_path, *, config, api_keys, limit)` async function — core logic
-- `_keys_from_env()` helper
-- `_build_parser()`, `_run_cli(args)`, `main(argv)` CLI
+**Yêu cầu:** Ghép bài 6B.1 + 6B.2 + 6B.3 + 6B.4 thành file hoàn chỉnh (255 dòng). Bỏ phần test.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""Batch labeling with gemini-3.1-flash-lite and multi-key rotation.
+
+Free-tier limits (gemini-3.1-flash-lite):
+    15 RPM  |  500 RPD/project  |  250K TPM
+
+Strategy:
+    - Delay 4.5s between requests → safe for 15 RPM
+    - Rotate keys round-robin → spread RPD across projects
+    - Write results incrementally → resumable on crash
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
+from labeling.prompt import (
+    PROMPT_VERSION,
+    SYSTEM_PROMPT,
+    GenerationParams,
+    parse_label_json,
+    render_user_prompt,
+)
+from labeling.qc import run_qc
+
+log = logging.getLogger(__name__)
+
+MODEL = "gemini-3.1-flash-lite"
+DELAY = 4.5           # seconds between requests (safe for 15 RPM)
+MAX_PER_KEY = 450     # conservative daily budget per key (< 500 RPD)
+
+
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def _load_done_ids(path: Path) -> set[int]:
+    """Load article_ids already in output file (for resume)."""
+    if not path.exists():
+        return set()
+    ids: set[int] = set()
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                try:
+                    row = json.loads(line)
+                    if "article_id" in row:
+                        ids.add(row["article_id"])
+                except json.JSONDecodeError:
+                    continue
+    return ids
+
+
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    """Append one JSON row to file (incremental write)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Core labeling
+# ---------------------------------------------------------------------------
+
+
+async def _label_one(article: dict[str, Any], labeler: GeminiLabeler) -> dict[str, Any]:
+    """Label a single article. Returns result dict (never raises)."""
+    user_prompt = render_user_prompt(
+        title=str(article.get("title") or ""),
+        category=str(article.get("category") or ""),
+        source=str(article.get("source") or ""),
+        content_text=str(article.get("content_text") or ""),
+    )
+    try:
+        raw = await asyncio.to_thread(
+            labeler.generate, system=SYSTEM_PROMPT, user=user_prompt
+        )
+        output = parse_label_json(raw)
+        qc = run_qc(
+            output=output,
+            source_text=f"{article.get('title') or ''} {article.get('content_text') or ''}",
+        )
+        return {
+            **article,
+            "summary": output.summary.strip(),
+            "key_entities": output.key_entities,
+            "confidence": output.confidence,
+            "refusal_reason": output.refusal_reason,
+            "prompt_version": PROMPT_VERSION,
+            "qc_passed": qc.passed,
+            "qc_details": qc.to_dict(),
+        }
+    except (GeminiLLMError, GeminiTransientError, ValueError) as exc:
+        return {
+            **article,
+            "summary": "",
+            "key_entities": [],
+            "confidence": 0.0,
+            "refusal_reason": str(exc),
+            "prompt_version": PROMPT_VERSION,
+            "qc_passed": False,
+            "qc_details": {"passed": False, "reasons": [f"label_error:{exc}"]},
+        }
+
+
+async def batch_label(
+    input_path: Path,
+    output_path: Path,
+    *,
+    api_keys: list[str] | None = None,
+    limit: int | None = None,
+    delay: float = DELAY,
+    max_per_key: int = MAX_PER_KEY,
+) -> dict[str, Any]:
+    """Label articles sequentially with key rotation.
+
+    - Resumable: skips article_ids already in output file.
+    - Incremental: writes each result immediately.
+    - Round-robin: rotates keys to spread daily quota.
+    """
+    keys = api_keys or _keys_from_env()
+
+    all_articles = read_jsonl(input_path)
+    done_ids = _load_done_ids(output_path)
+    pending = [a for a in all_articles if a.get("article_id") not in done_ids]
+    if limit is not None:
+        pending = pending[:limit]
+
+    if not pending:
+        log.info("Nothing to process — all articles already labeled.")
+        return {"processed": 0, "already_done": len(done_ids)}
+
+    # Track usage per key: counts[i] = requests used by key i
+    counts = [0] * len(keys)
+    current = 0
+    processed = 0
+    qc_passed = 0
+    start = time.time()
+
+    log.info("Batch: %d pending, %d keys, model=%s, delay=%.1fs",
+             len(pending), len(keys), MODEL, delay)
+
+    for article in pending:
+        # Find next key with budget remaining (round-robin)
+        key_idx = None
+        for _ in range(len(keys)):
+            if counts[current] < max_per_key:
+                key_idx = current
+                current = (current + 1) % len(keys)
+                break
+            current = (current + 1) % len(keys)
+
+        if key_idx is None:
+            log.warning("All keys exhausted daily budget. Stopping.")
+            break
+
+        labeler = GeminiLabeler(
+            api_keys=[keys[key_idx]],
+            model_chain=[MODEL],
+            params=GenerationParams(),
+        )
+        result = await _label_one(article, labeler)
+        _append_jsonl(output_path, result)
+        counts[key_idx] += 1
+        processed += 1
+
+        if result.get("qc_passed"):
+            qc_passed += 1
+
+        if processed % 10 == 0:
+            remaining = sum(max_per_key - c for c in counts)
+            log.info("Progress: %d/%d | qc_pass=%d | remaining=%d",
+                     processed, len(pending), qc_passed, remaining)
+
+        await asyncio.sleep(delay)
+
+    elapsed = time.time() - start
+    return {
+        "model": MODEL,
+        "total": len(all_articles),
+        "already_done": len(done_ids),
+        "processed": processed,
+        "qc_passed": qc_passed,
+        "elapsed_s": round(elapsed, 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _keys_from_env() -> list[str]:
+    """Read comma-separated API keys from GEMINI_API_KEYS."""
+    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
+    if not raw:
+        single = os.environ.get("GEMINI_API_KEY", "").strip()
+        if single:
+            return [single]
+        raise GeminiLLMError("Set GEMINI_API_KEYS or GEMINI_API_KEY")
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Batch label with gemini-3.1-flash-lite")
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--delay", type=float, default=DELAY)
+    parser.add_argument("--max-per-key", type=int, default=MAX_PER_KEY)
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    async def _run() -> int:
+        summary = await batch_label(
+            args.input, args.output,
+            limit=args.limit, delay=args.delay, max_per_key=args.max_per_key,
+        )
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0 if summary.get("processed", 0) > 0 or summary.get("already_done", 0) > 0 else 1
+
+    try:
+        return asyncio.run(_run())
+    except KeyboardInterrupt:
+        print("\ninterrupted")
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
 
 **Cách chạy:**
 ```bash
@@ -2081,11 +3444,112 @@ print(f"Splits: {{{k}: {len(v)} for k, v in splits.items()}}}")
 
 ### 🎯 Bài cuối chặng 7 — Code lại `labeling/split_dataset.py`
 
-**Yêu cầu:** Tạo file `labeling/split_dataset.py` (100 dòng) gồm:
-- `SplitName`, `EXPECTED_V2_COUNTS`
-- `split_bucket`, `read_jsonl`, `write_jsonl`, `dataset_record`, `split_rows`, `export_splits`
-- `_build_parser` (--input, --output, --check-v2-counts)
-- `main(argv)` function
+**Yêu cầu:** Tạo file `labeling/split_dataset.py` (100 dòng) gồm tất cả phần trên.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""Export QC-passed labels to deterministic train/val/test JSONL splits."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Literal
+
+SplitName = Literal["train", "val", "test"]
+EXPECTED_V2_COUNTS = {"train": 1636, "val": 218, "test": 216}
+
+
+def split_bucket(article_id: int, *, salt: str = "vn-news-v1") -> SplitName:
+    digest = hashlib.sha256(f"{salt}:{article_id}".encode()).digest()
+    bucket = digest[0]
+    if bucket < 26:
+        return "test"
+    if bucket < 52:
+        return "val"
+    return "train"
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False))
+            fh.write("\n")
+
+
+def dataset_record(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "article_id": int(row.get("article_id") or 0),
+        "source": str(row.get("source") or ""),
+        "url": str(row.get("url") or ""),
+        "title": str(row.get("title") or ""),
+        "category": row.get("category"),
+        "published_at": row.get("published_at"),
+        "content_text": str(row.get("content_text") or ""),
+        "summary": str(row.get("summary") or ""),
+        "prompt_version": str(row.get("prompt_version") or ""),
+    }
+
+
+def split_rows(rows: list[dict[str, Any]]) -> dict[SplitName, list[dict[str, Any]]]:
+    splits: dict[SplitName, list[dict[str, Any]]] = {"train": [], "val": [], "test": []}
+    for row in rows:
+        if row.get("qc_passed") is False:
+            continue
+        record = dataset_record(row)
+        if not record["content_text"] or not record["summary"]:
+            continue
+        splits[split_bucket(int(record["article_id"]))].append(record)
+    return splits
+
+
+def export_splits(input_path: Path, output_dir: Path) -> dict[str, int]:
+    rows = read_jsonl(input_path)
+    splits = split_rows(rows)
+    for split, split_rows_ in splits.items():
+        write_jsonl(output_dir / f"{split}.jsonl", split_rows_)
+    return {split: len(split_rows_) for split, split_rows_ in splits.items()}
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build deterministic dataset splits")
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--check-v2-counts",
+        action="store_true",
+        help="Fail unless split counts match the historical v2 report.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    counts = export_splits(args.input, args.output)
+    print(json.dumps(counts, ensure_ascii=False, indent=2))
+    if args.check_v2_counts and counts != EXPECTED_V2_COUNTS:
+        print(f"expected v2 counts {EXPECTED_V2_COUNTS}, got {counts}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
 
 **Kiểm tra:** So với `labeling/split_dataset.py` trong dự án — phải giống 100%.
 
@@ -2681,14 +4145,150 @@ assert len(result) == len(texts)
 
 ### 🎯 Bài cuối chặng 10 — Code lại `app/summarizer.py`
 
-**Yêu cầu:** Tạo file `app/summarizer.py` (138 dòng):
-- `GenerationConfig` dataclass (7 fields)
-- `ViT5Summarizer` class:
-  - `__init__` (model_id, base_model_id, token, device, generation) — đọc env vars
-  - `_load_as_peft_adapter(transformers)` → `tuple | None` — thử load PEFT, nếu fail trả None
-  - `_ensure_loaded()` → `(model, tokenizer)` — lazy load
-  - `summarize(text)` → str — wrap `summarize_batch`
-  - `summarize_batch(texts)` → list[str] — empty mask, batch generate, re-insert
+**Yêu cầu:** Tạo file `app/summarizer.py` (138 dòng) gồm tất cả phần trên.
+
+**Đáp án — file hoàn chỉnh:**
+
+```python
+"""ViT5/LoRA summarizer loaded from Hugging Face Hub or a local path."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+@dataclass(slots=True)
+class GenerationConfig:
+    max_input_length: int = 1024
+    max_new_tokens: int = 128
+    num_beams: int = 4
+    no_repeat_ngram_size: int = 3
+    length_penalty: float = 1.0
+    early_stopping: bool = True
+    batch_size: int = 4
+
+
+class ViT5Summarizer:
+    """Lazy wrapper around the fine-tuned ViT5 model.
+
+    The expected production/demo value is ``HF_MODEL_ID`` pointing to the
+    model or LoRA adapter equivalent to ``models/vit5-news-v2/checkpoint-309``.
+    If the ID is a PEFT adapter, ``HF_BASE_MODEL_ID`` may override the
+    base model; otherwise the adapter config's base model is used.
+    """
+
+    def __init__(
+        self,
+        model_id: str | None = None,
+        *,
+        base_model_id: str | None = None,
+        token: str | None = None,
+        device: str | None = None,
+        generation: GenerationConfig | None = None,
+    ) -> None:
+        self.model_id = model_id or os.environ.get("HF_MODEL_ID") or "VietAI/vit5-base"
+        self.base_model_id = base_model_id or os.environ.get("HF_BASE_MODEL_ID")
+        self.token = token if token is not None else os.environ.get("HF_TOKEN")
+        self.device = device or os.environ.get("MODEL_DEVICE")
+        self.generation = generation or GenerationConfig()
+        self._model: Any | None = None
+        self._tokenizer: Any | None = None
+
+    def _load_as_peft_adapter(self, transformers: Any) -> tuple[Any, Any] | None:
+        try:
+            from peft import PeftConfig, PeftModel
+
+            peft_cfg = PeftConfig.from_pretrained(self.model_id, token=self.token)
+            base_name = self.base_model_id or peft_cfg.base_model_name_or_path
+            base_model = transformers.AutoModelForSeq2SeqLM.from_pretrained(
+                base_name,
+                token=self.token,
+            )
+            model = PeftModel.from_pretrained(base_model, self.model_id, token=self.token)
+            tokenizer_source = self.model_id
+            if Path(self.model_id).exists() and not (Path(self.model_id) / "tokenizer.json").exists():
+                tokenizer_source = base_name
+            tokenizer = transformers.AutoTokenizer.from_pretrained(
+                tokenizer_source,
+                token=self.token,
+            )
+            return model, tokenizer
+        except Exception:
+            return None
+
+    def _ensure_loaded(self) -> tuple[Any, Any]:
+        if self._model is not None and self._tokenizer is not None:
+            return self._model, self._tokenizer
+
+        import transformers
+
+        loaded = self._load_as_peft_adapter(transformers)
+        if loaded is None:
+            model = transformers.AutoModelForSeq2SeqLM.from_pretrained(
+                self.model_id,
+                token=self.token,
+            )
+            tokenizer = transformers.AutoTokenizer.from_pretrained(
+                self.model_id,
+                token=self.token,
+            )
+        else:
+            model, tokenizer = loaded
+
+        if self.device:
+            model.to(self.device)
+        model.eval()
+        self._model = model
+        self._tokenizer = tokenizer
+        return model, tokenizer
+
+    def summarize(self, text: str) -> str:
+        return self.summarize_batch([text])[0] if text and text.strip() else ""
+
+    def summarize_batch(self, texts: list[str]) -> list[str]:
+        if not texts:
+            return []
+        empty_mask = [not text or not text.strip() for text in texts]
+        non_empty = [text for text, is_empty in zip(texts, empty_mask, strict=True) if not is_empty]
+        if not non_empty:
+            return ["" for _ in texts]
+
+        model, tokenizer = self._ensure_loaded()
+        decoded: list[str] = []
+        for start in range(0, len(non_empty), self.generation.batch_size):
+            batch = non_empty[start : start + self.generation.batch_size]
+            inputs = tokenizer(
+                batch,
+                max_length=self.generation.max_input_length,
+                truncation=True,
+                padding=True,
+                return_tensors="pt",
+            )
+            if self.device:
+                inputs = {key: value.to(self.device) for key, value in inputs.items()}
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=self.generation.max_new_tokens,
+                num_beams=self.generation.num_beams,
+                no_repeat_ngram_size=self.generation.no_repeat_ngram_size,
+                length_penalty=self.generation.length_penalty,
+                early_stopping=self.generation.early_stopping,
+            )
+            decoded.extend(str(x) for x in tokenizer.batch_decode(outputs, skip_special_tokens=True))
+
+        result: list[str] = []
+        cursor = 0
+        for is_empty in empty_mask:
+            if is_empty:
+                result.append("")
+            else:
+                result.append(decoded[cursor])
+                cursor += 1
+        return result
+```
 
 **Kiểm tra:** So với `app/summarizer.py` trong dự án — phải giống 100%.
 
@@ -2825,14 +4425,223 @@ function escapeHtml(value) {
 
 ### 🎯 Bài cuối chặng 11 — Code lại `app/main.py` + `app/templates/index.html`
 
-**Yêu cầu:**
-1. `app/main.py` (66 dòng): 3 routes, global summarizer, APP_VERSION = "0.2.0-simple".
-2. `app/templates/index.html` (140 dòng): HTML + CSS + JavaScript:
-   - CSS variables (--bg, --panel, --text, --muted, --line, --accent, --accent-dark)
-   - Responsive layout
-   - `escapeHtml` function
-   - `fetch("/api/summarize-today")` + render results
-   - Jinja2: `{{ model_id }}`, `{{ max_articles }}`
+**Yêu cầu:** Tạo 2 file gồm tất cả phần trên.
+
+**Đáp án — `app/main.py` (66 dòng):**
+
+```python
+"""FastAPI web demo for the simplified Vietnamese news summarizer."""
+
+from __future__ import annotations
+
+import os
+from datetime import date
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+
+from app.crawler import crawl_articles
+from app.schemas import HealthResponse, SummarizeResponse, SummaryItem
+from app.summarizer import ViT5Summarizer
+
+APP_VERSION = "0.2.0-simple"
+
+app = FastAPI(
+    title="vn-news-summarizer",
+    version=APP_VERSION,
+    description="Vietnamese news summarization demo using RSS crawl + fine-tuned ViT5.",
+)
+templates = Jinja2Templates(directory="app/templates")
+summarizer = ViT5Summarizer()
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "model_id": summarizer.model_id,
+            "max_articles": int(os.environ.get("MAX_ARTICLES_PER_DEMO", "5")),
+        },
+    )
+
+
+@app.get("/healthz", response_model=HealthResponse)
+async def healthz() -> HealthResponse:
+    return HealthResponse(status="ok", version=APP_VERSION)
+
+
+@app.post("/api/summarize-today", response_model=SummarizeResponse)
+async def summarize_today() -> SummarizeResponse:
+    limit = int(os.environ.get("MAX_ARTICLES_PER_DEMO", "5"))
+    articles, _stats = await crawl_articles(mode="demo", limit=limit)
+    if not articles:
+        raise HTTPException(status_code=502, detail="No article could be crawled and extracted.")
+
+    try:
+        summaries = summarizer.summarize_batch([article.content_text for article in articles])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Model inference failed: {exc}") from exc
+
+    items = [
+        SummaryItem(
+            title=article.title,
+            source=article.source_name,
+            url=article.url,
+            published_at=article.published_at,
+            summary=summary,
+        )
+        for article, summary in zip(articles, summaries, strict=True)
+    ]
+    return SummarizeResponse(date=date.today().isoformat(), total=len(items), items=items)
+```
+
+**Đáp án — `app/templates/index.html` (140 dòng):**
+
+```html
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VN News Summarizer</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --text: #172033;
+        --muted: #5c667a;
+        --line: #d8dde7;
+        --accent: #0f766e;
+        --accent-dark: #115e59;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        width: min(1040px, calc(100% - 32px));
+        margin: 32px auto;
+      }
+      header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 32px;
+        line-height: 1.15;
+      }
+      p { line-height: 1.55; }
+      .muted { color: var(--muted); margin: 0; }
+      button {
+        min-height: 44px;
+        border: 0;
+        border-radius: 6px;
+        padding: 0 18px;
+        background: var(--accent);
+        color: white;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      button:hover { background: var(--accent-dark); }
+      button:disabled { opacity: 0.65; cursor: wait; }
+      .status {
+        margin: 12px 0 20px;
+        color: var(--muted);
+        min-height: 24px;
+      }
+      .item {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        margin-bottom: 14px;
+      }
+      .item h2 {
+        margin: 0 0 8px;
+        font-size: 19px;
+        line-height: 1.35;
+      }
+      .meta {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      a { color: var(--accent-dark); }
+      @media (max-width: 720px) {
+        header { display: block; }
+        button { width: 100%; margin-top: 18px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>VN News Summarizer</h1>
+          <p class="muted">Model: {{ model_id }}. Số bài tối đa mỗi lần demo: {{ max_articles }}.</p>
+        </div>
+        <button id="summarizeBtn" type="button">Tóm tắt tin tức hôm nay</button>
+      </header>
+      <div id="status" class="status"></div>
+      <section id="results"></section>
+    </main>
+    <script>
+      const button = document.getElementById("summarizeBtn");
+      const statusEl = document.getElementById("status");
+      const resultsEl = document.getElementById("results");
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        statusEl.textContent = "Đang crawl và tóm tắt...";
+        resultsEl.innerHTML = "";
+        try {
+          const response = await fetch("/api/summarize-today", { method: "POST" });
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.detail || "Request failed");
+          }
+          statusEl.textContent = `Đã tóm tắt ${data.total} bài ngày ${data.date}.`;
+          resultsEl.innerHTML = data.items.map((item) => `
+            <article class="item">
+              <h2>${escapeHtml(item.title)}</h2>
+              <p class="meta">${escapeHtml(item.source)}${item.published_at ? " - " + escapeHtml(item.published_at) : ""}</p>
+              <p>${escapeHtml(item.summary)}</p>
+              <p class="meta">Tóm tắt bởi mô hình AI, có thể chưa chính xác.</p>
+              <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer nofollow">Đọc bài gốc</a>
+            </article>
+          `).join("");
+        } catch (error) {
+          statusEl.textContent = `Lỗi: ${error.message}`;
+        } finally {
+          button.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
+```
 
 **Kiểm tra:** So với `app/main.py` và `app/templates/index.html` trong dự án — phải giống 100%.
 

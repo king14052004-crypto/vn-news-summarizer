@@ -16,14 +16,16 @@ Tài liệu này dành cho người mới học. Mục tiêu: hiểu từng mả
 | `app/sources.py` | 189 | 2 |
 | `labeling/prompt.py` | 105 | 3 |
 | `labeling/qc.py` | 153 | 4 |
+| `labeling/io.py` | 25 | 5 |
 | `labeling/gemini_labeler.py` | 182 | 5 |
-| `labeling/label_dataset.py` | 133 | 6 |
-| `labeling/batch_labeler.py` | 255 | 6B |
-| `labeling/split_dataset.py` | 100 | 7 |
+| `labeling/label_dataset.py` | 115 | 6 |
+| `labeling/batch_labeler.py` | 224 | 6B |
+| `labeling/split_dataset.py` | 84 | 7 |
 | `app/crawler.py` | 514 | 8-9 |
 | `app/summarizer.py` | 138 | 10 |
 | `app/main.py` | 66 | 11 |
 | `app/templates/index.html` | 140 | 11 |
+| `streamlit_app.py` | 105 | 11 |
 
 ---
 
@@ -50,8 +52,10 @@ Tài liệu này dành cho người mới học. Mục tiêu: hiểu từng mả
 
 **4. Đọc/ghi JSONL:**
 JSONL = mỗi dòng là 1 object JSON. Dự án dùng format này cho dữ liệu bài báo.
+Hai hàm `read_jsonl` và `write_jsonl` được đặt chung trong file `labeling/io.py` để các module khác import dùng lại (DRY — Don't Repeat Yourself).
 
 ```python
+# labeling/io.py
 import json
 from pathlib import Path
 
@@ -71,6 +75,8 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
             fh.write(json.dumps(row, ensure_ascii=False))
             fh.write("\n")
 ```
+
+Các file khác import: `from labeling.io import read_jsonl, write_jsonl`.
 
 **Tại sao `ensure_ascii=False`?** Vì dữ liệu tiếng Việt. Nếu `True`, "Hà Nội" → `"H\\u00e0 N\\u1ed9i"`.
 
@@ -2375,14 +2381,13 @@ def _keys_from_env() -> list[str]:
 **2. `asyncio.Semaphore`:** giới hạn concurrent requests.
 **3. `asyncio.gather`:** chạy nhiều coroutine đồng thời.
 
-### Bài tập 6.1 — Imports + read_jsonl + write_jsonl (dòng 1-39 trong dự án)
+### Bài tập 6.1 — Imports (dòng 1-20 trong dự án)
 
-**Bối cảnh:** Phần đầu file `label_dataset.py` gồm: module docstring, imports (asyncio, json, sys, Path, typing, và từ các module labeling), và 2 I/O helpers giống các chặng trước. `read_jsonl` đọc file JSONL, `write_jsonl` ghi list rows ra file.
+**Bối cảnh:** Phần đầu file `label_dataset.py` gồm: module docstring và imports. Các hàm I/O (`read_jsonl`, `write_jsonl`) đã được tách ra file `labeling/io.py` (Chặng 0) nên ở đây chỉ cần import lại.
 
 **Yêu cầu:**
 1. Viết module docstring.
-2. Import đúng như dự án: `argparse`, `asyncio`, `json`, `sys`, `Path`, `Any`, và từ `labeling.prompt` (PROMPT_MODEL, PROMPT_VERSION, SYSTEM_PROMPT, GenerationParams, parse_label_json, render_user_prompt), `labeling.qc` (run_qc), `labeling.gemini_labeler` (GeminiLabeler, GeminiLLMError, GeminiTransientError).
-3. Viết `read_jsonl` và `write_jsonl` — code **đúng như dự án**.
+2. Import đúng như dự án: `argparse`, `asyncio`, `sys`, `Path`, `Any`, từ `labeling.io` (read_jsonl, write_jsonl), từ `labeling.prompt` (PROMPT_MODEL, PROMPT_VERSION, SYSTEM_PROMPT, GenerationParams, parse_label_json, render_user_prompt), `labeling.qc` (run_qc), `labeling.gemini_labeler` (GeminiLabeler, GeminiLLMError, GeminiTransientError).
 
 **Đáp án:**
 
@@ -2393,11 +2398,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 from pathlib import Path
 from typing import Any
 
+from labeling.io import read_jsonl, write_jsonl
 from labeling.prompt import (
     PROMPT_MODEL,
     PROMPT_VERSION,
@@ -2408,27 +2413,9 @@ from labeling.prompt import (
 )
 from labeling.qc import run_qc
 from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False))
-            fh.write("\n")
 ```
 
-**So sánh dự án:** Mở `labeling/label_dataset.py` dòng 1-39 — code phải giống.
+**So sánh dự án:** Mở `labeling/label_dataset.py` dòng 1-20 — code phải giống.
 
 ### Bài tập 6.2 — `_label_one` với asyncio.to_thread + Semaphore (dòng 42-82 trong dự án)
 
@@ -2513,7 +2500,7 @@ async def label_rows(
 
 **So sánh dự án:** Mở `labeling/label_dataset.py` dòng 85-97 — code phải giống.
 
-### Bài tập 6.4 — `_build_parser` + `_run_cli` + `main` (dòng 100-133 trong dự án)
+### Bài tập 6.4 — `_build_parser` + `_run_cli` + `main` (dòng 82-115 trong dự án)
 
 **Bối cảnh:** CLI pipeline: parse arguments → đọc JSONL → label → ghi output → in summary. Pattern giống batch_labeler: `_build_parser` tạo argparse, `_run_cli` chạy async logic, `main` gọi `asyncio.run` và xử lý KeyboardInterrupt.
 
@@ -2558,11 +2545,11 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-**So sánh dự án:** Mở `labeling/label_dataset.py` dòng 100-133 — code phải giống.
+**So sánh dự án:** Mở `labeling/label_dataset.py` dòng 82-115 — code phải giống.
 
 ### 🎯 Bài cuối chặng 6 — Code lại `labeling/label_dataset.py`
 
-**Yêu cầu:** Ghép bài 6.1 + 6.2 + 6.3 + 6.4 thành file `labeling/label_dataset.py` hoàn chỉnh (133 dòng). Bỏ phần test, chỉ giữ code.
+**Yêu cầu:** Ghép bài 6.1 + 6.2 + 6.3 + 6.4 thành file `labeling/label_dataset.py` hoàn chỉnh (115 dòng). Bỏ phần test, chỉ giữ code.
 
 **Đáp án — file hoàn chỉnh:**
 
@@ -2573,11 +2560,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 from pathlib import Path
 from typing import Any
 
+from labeling.io import read_jsonl, write_jsonl
 from labeling.prompt import (
     PROMPT_MODEL,
     PROMPT_VERSION,
@@ -2588,24 +2575,6 @@ from labeling.prompt import (
 )
 from labeling.qc import run_qc
 from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False))
-            fh.write("\n")
 
 
 async def _label_one(
@@ -2703,6 +2672,7 @@ if __name__ == "__main__":
 ```
 
 **Kiểm tra:** So với `labeling/label_dataset.py` trong dự án — phải giống 100%.
+**Lưu ý:** `read_jsonl`/`write_jsonl` đã được chuyển sang `labeling/io.py`, không còn định nghĩa trực tiếp trong file này.
 
 ---
 
@@ -2758,15 +2728,15 @@ for _ in range(len(keys)):
     current = (current + 1) % len(keys)
 ```
 
-### Bài tập 6B.1 — Constants, imports, I/O helpers (dòng 1-77 trong dự án)
+### Bài tập 6B.1 — Constants, imports, I/O helpers (dòng 1-65 trong dự án)
 
-**Bối cảnh:** Phần đầu `batch_labeler.py` gồm: docstring, imports, 3 constants, và 3 I/O helpers giống các bài trước nhưng thêm `_load_done_ids` (resume) và `_append_jsonl` (incremental write).
+**Bối cảnh:** Phần đầu `batch_labeler.py` gồm: docstring, imports, 3 constants, và 2 I/O helpers riêng (`_load_done_ids` cho resume và `_append_jsonl` cho incremental write). `read_jsonl` được import từ `labeling.io`, `_keys_from_env` được import từ `labeling.gemini_labeler`.
 
 **Yêu cầu:**
 1. Viết module docstring giải thích: free-tier limits, strategy (delay, rotate, resume).
-2. Import đúng như dự án (bao gồm import từ `labeling.gemini_labeler`, `labeling.prompt`, `labeling.qc`).
+2. Import đúng như dự án (bao gồm import từ `labeling.gemini_labeler` kèm `_keys_from_env`, `labeling.io`, `labeling.prompt`, `labeling.qc`).
 3. Tạo 3 constants: `MODEL`, `DELAY`, `MAX_PER_KEY`.
-4. Viết 3 I/O functions: `read_jsonl`, `_load_done_ids`, `_append_jsonl` — code **đúng như dự án**.
+4. Viết 2 I/O functions: `_load_done_ids`, `_append_jsonl` — code **đúng như dự án**.
 
 **Đáp án:**
 
@@ -2788,12 +2758,12 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
 
-from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError, _keys_from_env
+from labeling.io import read_jsonl
 from labeling.prompt import (
     PROMPT_VERSION,
     SYSTEM_PROMPT,
@@ -2808,16 +2778,6 @@ log = logging.getLogger(__name__)
 MODEL = "gemini-3.1-flash-lite"
 DELAY = 4.5           # seconds between requests (safe for 15 RPM)
 MAX_PER_KEY = 450     # conservative daily budget per key (< 500 RPD)
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
 
 
 def _load_done_ids(path: Path) -> set[int]:
@@ -2845,7 +2805,9 @@ def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 ```
 
-**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 1-77 — code phải giống.
+**Lưu ý:** `read_jsonl` được import từ `labeling.io`, `_keys_from_env` được import từ `labeling.gemini_labeler` — không còn duplicate trong file này. Import `os` cũng không cần nữa.
+
+**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 1-65 — code phải giống.
 
 ### Bài tập 6B.2 — `_label_one()` (dòng 85-122 trong dự án)
 
@@ -2991,26 +2953,15 @@ async def batch_label(
 
 **So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 125-197 — code phải giống.
 
-### Bài tập 6B.4 — `_keys_from_env()` + `main()` CLI (dòng 203-255 trong dự án)
+### Bài tập 6B.4 — `main()` CLI (dòng 190-224 trong dự án)
 
-**Bối cảnh:** `_keys_from_env()` giống chặng 5. CLI dùng argparse với 5 arguments: `--input`, `--output`, `--limit`, `--delay`, `--max-per-key`.
+**Bối cảnh:** `_keys_from_env()` đã được chuyển sang `labeling/gemini_labeler.py` và import ở đầu file. CLI dùng argparse với 5 arguments: `--input`, `--output`, `--limit`, `--delay`, `--max-per-key`.
 
-**Yêu cầu:** Viết `_keys_from_env()` và `main()` — code **đúng như dự án**.
+**Yêu cầu:** Viết `main()` — code **đúng như dự án**. (`_keys_from_env` đã import từ `labeling.gemini_labeler`.)
 
 **Đáp án:**
 
 ```python
-def _keys_from_env() -> list[str]:
-    """Read comma-separated API keys from GEMINI_API_KEYS."""
-    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
-    if not raw:
-        single = os.environ.get("GEMINI_API_KEY", "").strip()
-        if single:
-            return [single]
-        raise GeminiLLMError("Set GEMINI_API_KEYS or GEMINI_API_KEY")
-    return [k.strip() for k in raw.split(",") if k.strip()]
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Batch label with gemini-3.1-flash-lite")
     parser.add_argument("--input", type=Path, required=True)
@@ -3041,7 +2992,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 203-255 — code phải giống.
+**So sánh dự án:** Mở `labeling/batch_labeler.py` dòng 190-224 — code phải giống.
 
 ### Bài tập 6B.5 — Ước tính tài nguyên (bài tập bổ sung — không nằm trong file dự án)
 
@@ -3068,7 +3019,7 @@ Kết quả: 9 keys, 1 ngày, ~3.5 giờ chạy liên tục.
 
 ### 🎯 Bài cuối chặng 6B — Code lại `labeling/batch_labeler.py`
 
-**Yêu cầu:** Ghép bài 6B.1 + 6B.2 + 6B.3 + 6B.4 thành file hoàn chỉnh (255 dòng). Bỏ phần test.
+**Yêu cầu:** Ghép bài 6B.1 + 6B.2 + 6B.3 + 6B.4 thành file hoàn chỉnh (224 dòng). Bỏ phần test.
 
 **Đáp án — file hoàn chỉnh:**
 
@@ -3090,12 +3041,12 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
 
-from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError, _keys_from_env
+from labeling.io import read_jsonl
 from labeling.prompt import (
     PROMPT_VERSION,
     SYSTEM_PROMPT,
@@ -3115,16 +3066,6 @@ MAX_PER_KEY = 450     # conservative daily budget per key (< 500 RPD)
 # ---------------------------------------------------------------------------
 # I/O helpers
 # ---------------------------------------------------------------------------
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
 
 
 def _load_done_ids(path: Path) -> set[int]:
@@ -3280,22 +3221,6 @@ async def batch_label(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _keys_from_env() -> list[str]:
-    """Read comma-separated API keys from GEMINI_API_KEYS."""
-    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
-    if not raw:
-        single = os.environ.get("GEMINI_API_KEY", "").strip()
-        if single:
-            return [single]
-        raise GeminiLLMError("Set GEMINI_API_KEYS or GEMINI_API_KEY")
-    return [k.strip() for k in raw.split(",") if k.strip()]
-
-
-# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -3340,6 +3265,7 @@ python -m labeling.batch_labeler \
 ```
 
 **Kiểm tra:** So với `labeling/batch_labeler.py` trong dự án — phải giống 100%.
+**Lưu ý:** `read_jsonl` import từ `labeling.io`, `_keys_from_env` import từ `labeling.gemini_labeler` — không còn duplicate.
 
 ---
 
@@ -3461,7 +3387,7 @@ print(f"Splits: {{{k}: {len(v)} for k, v in splits.items()}}}")
 
 ### 🎯 Bài cuối chặng 7 — Code lại `labeling/split_dataset.py`
 
-**Yêu cầu:** Tạo file `labeling/split_dataset.py` (100 dòng) gồm tất cả phần trên.
+**Yêu cầu:** Tạo file `labeling/split_dataset.py` (84 dòng) gồm tất cả phần trên.
 
 **Đáp án — file hoàn chỉnh:**
 
@@ -3476,6 +3402,8 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+from labeling.io import read_jsonl, write_jsonl
+
 SplitName = Literal["train", "val", "test"]
 EXPECTED_V2_COUNTS = {"train": 1636, "val": 218, "test": 216}
 
@@ -3488,24 +3416,6 @@ def split_bucket(article_id: int, *, salt: str = "vn-news-v1") -> SplitName:
     if bucket < 52:
         return "val"
     return "train"
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False))
-            fh.write("\n")
 
 
 def dataset_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -3569,6 +3479,7 @@ if __name__ == "__main__":
 ```
 
 **Kiểm tra:** So với `labeling/split_dataset.py` trong dự án — phải giống 100%.
+**Lưu ý:** `read_jsonl`/`write_jsonl` import từ `labeling.io` — không còn define trong file này.
 
 ---
 

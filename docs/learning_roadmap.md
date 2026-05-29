@@ -1184,7 +1184,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 PROMPT_VERSION = "1.2.0"
-PROMPT_MODEL = "gemini-2.5-flash"
+PROMPT_MODEL = "gemini-3.1-flash-lite"
 
 SYSTEM_PROMPT = """
 Bạn là biên tập viên báo chí tiếng Việt. Tóm tắt phải:
@@ -1799,7 +1799,7 @@ from google.genai import types
 
 client = genai.Client(api_key="YOUR_KEY")
 response = client.models.generate_content(
-    model="gemini-2.5-flash",
+    model="gemini-3.1-flash-lite",
     contents="Xin chào",
     config=types.GenerateContentConfig(temperature=0.2, max_output_tokens=4096),
 )
@@ -1808,7 +1808,7 @@ print(response.text)
 
 **3. Key rotation:** khi key bị rate limit → tự chuyển sang key tiếp theo trong danh sách.
 
-**4. Model fallback:** `gemini-2.5-flash` không khả dụng → thử `gemini-2.0-flash`.
+**4. Model mặc định:** `gemini-3.1-flash-lite` (free-tier: 15 RPM, 500 RPD/project).
 
 **5. Error classification (inline):** phân loại lỗi ngay trong vòng lặp:
 - quota → `continue` (thử key tiếp)
@@ -1828,7 +1828,7 @@ print(response.text)
 1. Viết module docstring giải thích file dùng để làm gì (multi-key rotation, model fallback).
 2. Import: `annotations`, `logging`, `os`, `threading`, `Callable` từ `collections.abc`, `Any` từ `typing`, tenacity (`retry`, `retry_if_exception_type`, `stop_after_attempt`, `wait_exponential`), `GenerationParams` từ `labeling.prompt`.
 3. Tạo logger: `log = logging.getLogger(__name__)`.
-4. Tạo `DEFAULT_MODEL_CHAIN: list[str]` = `["gemini-2.5-flash", "gemini-2.0-flash"]`.
+4. Tạo `DEFAULT_MODEL_CHAIN: list[str]` = `["gemini-3.1-flash-lite"]`.
 5. Tạo 2 exception classes kế thừa `RuntimeError` — dùng docstring **đúng như dự án** (không dùng `pass`).
 6. Tạo type alias `OverrideFn = Callable[[str, str], str]`.
 7. Test: raise và catch mỗi exception.
@@ -1842,8 +1842,7 @@ Labeling runs on free AI Studio API keys.  Multiple keys can be supplied
 (comma-separated in the env-var or passed as a list) so that when one key
 hits a rate / quota limit the next key is tried automatically.
 
-Model fallback order (configurable):
-    gemini-2.5-flash  →  gemini-2.0-flash
+Default model: gemini-3.1-flash-lite (configurable via model_chain).
 """
 
 from __future__ import annotations
@@ -1861,8 +1860,7 @@ from labeling.prompt import GenerationParams
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL_CHAIN: list[str] = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 
@@ -1988,11 +1986,11 @@ class GeminiLabeler:
 # Test (truyền keys trực tiếp, không cần gọi API)
 labeler = GeminiLabeler(
     api_keys=["key1", "key2"],
-    model_chain=["gemini-2.5-flash"],
+    model_chain=["gemini-3.1-flash-lite"],
     override_callable=lambda sys, usr: '{"summary":"test","confidence":0.9}',
 )
 assert labeler._keys == ["key1", "key2"]
-assert labeler._model_chain == ["gemini-2.5-flash"]
+assert labeler._model_chain == ["gemini-3.1-flash-lite"]
 print("OK! GeminiLabeler created.")
 ```
 
@@ -2187,8 +2185,7 @@ Labeling runs on free AI Studio API keys.  Multiple keys can be supplied
 (comma-separated in the env-var or passed as a list) so that when one key
 hits a rate / quota limit the next key is tried automatically.
 
-Model fallback order (configurable):
-    gemini-2.5-flash  →  gemini-2.0-flash
+Default model: gemini-3.1-flash-lite (configurable via model_chain).
 """
 
 from __future__ import annotations
@@ -2206,8 +2203,7 @@ from labeling.prompt import GenerationParams
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL_CHAIN: list[str] = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 

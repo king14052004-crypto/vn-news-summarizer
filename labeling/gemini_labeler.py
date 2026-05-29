@@ -4,8 +4,7 @@ Labeling runs on free AI Studio API keys.  Multiple keys can be supplied
 (comma-separated in the env-var or passed as a list) so that when one key
 hits a rate / quota limit the next key is tried automatically.
 
-Model fallback order (configurable):
-    gemini-2.5-flash  →  gemini-2.0-flash
+Default model: gemini-3.1-flash-lite (configurable via model_chain).
 """
 
 from __future__ import annotations
@@ -23,8 +22,7 @@ from labeling.prompt import GenerationParams
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL_CHAIN: list[str] = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 

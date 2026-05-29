@@ -40,7 +40,7 @@ vn-news-summarizer/
 │   ├── prompt.py                # Prompt v1.2.0 + robust JSON parser
 │   ├── qc.py                    # Deterministic QC checks
 │   ├── label_dataset.py         # raw articles JSONL → labeled JSONL
-│   ├── batch_labeler.py         # Batch labeling (sequential, resumable)
+│   ├── io.py                    # Shared JSONL read/write helpers
 │   └── split_dataset.py         # labeled JSONL → train/val/test JSONL
 ├── notebooks/finetune_vit5_lora.ipynb
 ├── data/
@@ -170,26 +170,12 @@ then set them in your `.env` or export directly:
 export GEMINI_API_KEYS=key1,key2,key3
 ```
 
-**Option A — Concurrent labeling** (faster, uses more quota):
-
 ```bash
 python -m labeling.label_dataset \
   --input data/raw/articles.jsonl \
   --output data/labeled/labeled_articles.jsonl \
   --concurrency 5
 ```
-
-**Option B — Batch labeling** (sequential, rate-limited, resumable):
-
-```bash
-python -m labeling.batch_labeler \
-  --input data/raw/articles.jsonl \
-  --output data/labeled/labeled_articles.jsonl
-```
-
-Batch mode delays 4.5 s between requests to stay within the free-tier
-15 RPM limit and writes results incrementally (safe to interrupt and
-resume).
 
 ### Step 3 — Export train/val/test splits
 

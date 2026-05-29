@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+from labeling.io import read_jsonl, write_jsonl
+
 SplitName = Literal["train", "val", "test"]
 EXPECTED_V2_COUNTS = {"train": 1636, "val": 218, "test": 216}
 
@@ -20,24 +22,6 @@ def split_bucket(article_id: int, *, salt: str = "vn-news-v1") -> SplitName:
     if bucket < 52:
         return "val"
     return "train"
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
-
-
-def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False))
-            fh.write("\n")
 
 
 def dataset_record(row: dict[str, Any]) -> dict[str, Any]:

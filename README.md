@@ -11,11 +11,7 @@ CI/CD, and Next.js.
 
 ## Ground Truth Results
 
-The exact historical reports are preserved in:
-
-- `docs/labeling_report.md`
-- `docs/training_report.md`
-- `docs/learning_roadmap.md`
+The exact historical reports are preserved in `docs/learning_roadmap.md`.
 
 Key numbers:
 
@@ -52,6 +48,7 @@ vn-news-summarizer/
 │   ├── labeled/
 │   └── datasets/
 ├── docs/
+├── streamlit_app.py             # Streamlit inference UI
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt
@@ -126,15 +123,23 @@ GEMINI_API_KEYS=key1,key2,key3
 
 ## Run the Web Demo
 
-### Local
+### Option 1 — Streamlit UI (recommended)
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Open <http://localhost:8501>. The Streamlit UI provides:
+- **Nhập văn bản**: Paste article text manually and get a summary.
+- **Crawl tin mới**: Crawl today's RSS feeds and summarize automatically.
+
+### Option 2 — FastAPI (API-first)
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Open <http://localhost:8000>, then click **Tóm tắt tin tức hôm nay**.
-The app crawls current RSS feeds, extracts article text, and summarizes
-with the fine-tuned ViT5 model.
 
 ### Docker
 
@@ -142,7 +147,7 @@ with the fine-tuned ViT5 model.
 docker compose up --build
 ```
 
-The API is exposed at <http://localhost:8000>.
+The FastAPI is exposed at <http://localhost:8000>.
 
 ## Build Dataset Artifacts
 
@@ -220,18 +225,9 @@ training values directly in the notebook for readability:
 | `make label`         | Label articles with Gemini (concurrent mode)     |
 | `make split`         | Export QC-passed labels to `data/datasets/v2`    |
 | `make api`           | Run FastAPI demo on `http://localhost:8000`       |
+| `make streamlit`     | Run Streamlit UI on `http://localhost:8501`       |
 | `make docker-up`     | Build and run the demo container                 |
 | `make docker-down`   | Stop the demo container                          |
-| `make test`          | Run the test suite                               |
-
-## Tests
-
-```bash
-python -m pytest
-```
-
-The focused tests check the source configuration, prompt/parser
-behavior, report numbers, and JSONL split schema.
 
 ## Environment Variables Reference
 

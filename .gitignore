@@ -1,90 +1,90 @@
-# # Python
-# __pycache__/
-# *.py[cod]
-# *$py.class
-# *.so
-# .Python
-# build/
-# dist/
-# *.egg-info/
-# *.egg
-# .pytest_cache/
-# .mypy_cache/
-# .ruff_cache/
-# .coverage
-# htmlcov/
-# .tox/
-# .nox/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
 
-# # Virtual environments
-# .venv/
-# venv/
-# env/
-# ENV/
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
 
-# # uv
-# # Keep uv.lock in repo for reproducibility — do NOT ignore it.
+# uv
+# Keep uv.lock in repo for reproducibility — do NOT ignore it.
 
-# # IDE
-# .vscode/
-# .idea/
-# *.swp
-# *.swo
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# # OS
-# .DS_Store
-# Thumbs.db
+# OS
+.DS_Store
+Thumbs.db
 
-# # Env / secrets
-# .env
-# .env.local
-# .env.*.local
-# *.pem
-# service-account*.json
-# credentials*.json
-# /secrets/*.json
-# !**/configs/**/*.json
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+service-account*.json
+credentials*.json
+/secrets/*.json
+!**/configs/**/*.json
 
-# # Data (managed by DVC) — local artefacts, never commit
-# /data/raw/*
-# /data/interim/
-# /data/processed/
-# /data/external/
-# /data/datasets/*
-# /data/labeled/*
-# /data/app.db
-# /data/*.sqlite
-# /data/*.sqlite3
-# !/data/.gitkeep
-# !/data/raw/.gitkeep
-# !/data/datasets/.gitkeep
-# !/data/labeled/.gitkeep
+# Data (managed by DVC) — local artefacts, never commit
+/data/raw/*
+/data/interim/
+/data/processed/
+/data/external/
+/data/datasets/*
+/data/labeled/*
+/data/app.db
+/data/*.sqlite
+/data/*.sqlite3
+!/data/.gitkeep
+!/data/raw/.gitkeep
+!/data/datasets/.gitkeep
+!/data/labeled/.gitkeep
 
-# # Models / artifacts
-# /models/
-# !/models/.gitkeep
-# mlruns/
-# mlflow.db
-# wandb/
+# Models / artifacts
+/models/
+!/models/.gitkeep
+mlruns/
+mlflow.db
+wandb/
 
-# # Notebooks
-# .ipynb_checkpoints/
+# Notebooks
+.ipynb_checkpoints/
 
-# # Node / Next.js
-# node_modules/
-# .next/
-# out/
-# *.tsbuildinfo
-# next-env.d.ts
-# .pnpm-store/
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+.pnpm-store/
 
-# # Docker
-# *.pid
+# Docker
+*.pid
 
-# # Logs
-# *.log
-# logs/
+# Logs
+*.log
+logs/
 
-# # Misc
-# .cache/
-# .tmp/
+# Misc
+.cache/
+.tmp/

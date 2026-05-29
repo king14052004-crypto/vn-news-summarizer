@@ -15,12 +15,12 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
 
-from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError, _keys_from_env
+from labeling.io import read_jsonl
 from labeling.prompt import (
     PROMPT_VERSION,
     SYSTEM_PROMPT,
@@ -35,21 +35,6 @@ log = logging.getLogger(__name__)
 MODEL = "gemini-3.1-flash-lite"
 DELAY = 4.5           # seconds between requests (safe for 15 RPM)
 MAX_PER_KEY = 450     # conservative daily budget per key (< 500 RPD)
-
-
-# ---------------------------------------------------------------------------
-# I/O helpers
-# ---------------------------------------------------------------------------
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
 
 
 def _load_done_ids(path: Path) -> set[int]:
@@ -202,22 +187,6 @@ async def batch_label(
         "qc_passed": qc_passed,
         "elapsed_s": round(elapsed, 1),
     }
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _keys_from_env() -> list[str]:
-    """Read comma-separated API keys from GEMINI_API_KEYS."""
-    raw = os.environ.get("GEMINI_API_KEYS", "").strip()
-    if not raw:
-        single = os.environ.get("GEMINI_API_KEY", "").strip()
-        if single:
-            return [single]
-        raise GeminiLLMError("Set GEMINI_API_KEYS or GEMINI_API_KEY")
-    return [k.strip() for k in raw.split(",") if k.strip()]
 
 
 # ---------------------------------------------------------------------------

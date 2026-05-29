@@ -11,11 +11,7 @@ CI/CD, and Next.js.
 
 ## Ground Truth Results
 
-The exact historical reports are preserved in:
-
-- `docs/labeling_report.md`
-- `docs/training_report.md`
-- `docs/learning_roadmap.md`
+The exact historical reports are preserved in `docs/learning_roadmap.md`.
 
 Key numbers:
 
@@ -232,16 +228,6 @@ training values directly in the notebook for readability:
 | `make streamlit`     | Run Streamlit UI on `http://localhost:8501`       |
 | `make docker-up`     | Build and run the demo container                 |
 | `make docker-down`   | Stop the demo container                          |
-| `make test`          | Run the test suite                               |
-
-## Tests
-
-```bash
-python -m pytest
-```
-
-The focused tests check the source configuration, prompt/parser
-behavior, report numbers, and JSONL split schema.
 
 ## Environment Variables Reference
 

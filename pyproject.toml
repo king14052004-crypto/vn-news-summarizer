@@ -37,25 +37,15 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3",
     "ruff>=0.7",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["app", "labeling", "tests_simple"]
+src = ["app", "labeling"]
 extend-exclude = [
     "data",
-    "models",
     "notebooks",
-    "packages",
-    "scripts",
-    "alembic",
-    "apps",
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests_simple"]
-pythonpath = ["."]
-addopts = ["-q"]

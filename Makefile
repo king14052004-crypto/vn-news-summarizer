@@ -1,7 +1,7 @@
 PY ?= python
 PIP ?= pip
 
-.PHONY: help setup crawl-labeling label split api streamlit docker-up docker-down test
+.PHONY: help setup crawl-labeling label split api streamlit docker-up docker-down
 
 help:
 	@echo "setup          Install dependencies from requirements.txt"
@@ -35,6 +35,3 @@ docker-up:
 
 docker-down:
 	docker compose down
-
-test:
-	$(PY) -m pytest

@@ -2387,7 +2387,7 @@ def _keys_from_env() -> list[str]:
 
 **Yêu cầu:**
 1. Viết module docstring.
-2. Import đúng như dự án: `argparse`, `asyncio`, `sys`, `Path`, `Any`, từ `labeling.io` (read_jsonl, write_jsonl), từ `labeling.prompt` (PROMPT_MODEL, PROMPT_VERSION, SYSTEM_PROMPT, GenerationParams, parse_label_json, render_user_prompt), `labeling.qc` (run_qc), `labeling.gemini_labeler` (GeminiLabeler, GeminiLLMError, GeminiTransientError).
+2. Import đúng như dự án (theo thứ tự ABC): `argparse`, `asyncio`, `sys`, `Path`, `Any`, từ `labeling.gemini_labeler` (GeminiLabeler, GeminiLLMError, GeminiTransientError), `labeling.io` (read_jsonl, write_jsonl), `labeling.prompt` (PROMPT_MODEL, PROMPT_VERSION, SYSTEM_PROMPT, GenerationParams, parse_label_json, render_user_prompt), `labeling.qc` (run_qc).
 
 **Đáp án:**
 
@@ -2402,6 +2402,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
 from labeling.io import read_jsonl, write_jsonl
 from labeling.prompt import (
     PROMPT_MODEL,
@@ -2412,7 +2413,6 @@ from labeling.prompt import (
     render_user_prompt,
 )
 from labeling.qc import run_qc
-from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
 ```
 
 **So sánh dự án:** Mở `labeling/label_dataset.py` dòng 1-20 — code phải giống.
@@ -2564,6 +2564,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
 from labeling.io import read_jsonl, write_jsonl
 from labeling.prompt import (
     PROMPT_MODEL,
@@ -2574,7 +2575,6 @@ from labeling.prompt import (
     render_user_prompt,
 )
 from labeling.qc import run_qc
-from labeling.gemini_labeler import GeminiLabeler, GeminiLLMError, GeminiTransientError
 
 
 async def _label_one(

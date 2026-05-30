@@ -47,6 +47,8 @@ vn-news-summarizer/
 │   ├── raw/
 │   ├── labeled/
 │   └── datasets/
+│       └── v2/                  # Committed training data: train/val/test.jsonl
+├── models/                      # Put your fine-tuned checkpoint here (local inference)
 ├── docs/
 ├── streamlit_app.py             # Streamlit inference UI
 ├── Dockerfile
@@ -112,14 +114,46 @@ copy .env.example .env
 Then edit `.env` and set the required values:
 
 ```dotenv
-# Point to your fine-tuned model or LoRA adapter on Hugging Face
-HF_MODEL_ID=your-hf-username/vit5-news-v2
+# Run locally with your fine-tuned checkpoint (no Hugging Face needed):
+HF_MODEL_ID=models/vit5-news-v2
 HF_BASE_MODEL_ID=VietAI/vit5-base
-HF_TOKEN=              # optional — only needed for private models
+HF_TOKEN=              # optional — only for private Hugging Face repos
 
 # For Gemini labeling (see "Build Dataset Artifacts" below)
-GEMINI_API_KEYS=key1,key2,key3
+GEMINI_API_KEYS=key1,key2,key3,key4,key5
 ```
+
+## Use a Local Fine-tuned Model (no Hugging Face)
+
+`HF_MODEL_ID` accepts **either** a Hugging Face repo id **or a local path**, so
+you can run entirely offline with the checkpoint produced by the notebook.
+
+1. The training notebook saves to `OUTPUT_DIR = models/vit5-news-v2` via
+   `trainer.save_model(...)` + `tokenizer.save_pretrained(...)`, and also writes
+   per-epoch checkpoints (`models/vit5-news-v2/checkpoint-XXX`). Because LoRA is
+   used, this folder is a small **adapter**, not a full model.
+2. Copy that folder into this repo under `models/` (the folder is git-ignored, so
+   large weights never get committed):
+
+   ```text
+   models/
+   └── vit5-news-v2/
+       ├── adapter_config.json
+       ├── adapter_model.safetensors
+       ├── tokenizer.json / spiece.model / ...
+       └── checkpoint-309/        # (optional) a specific epoch
+   ```
+3. Point `.env` at the local folder and set the base model the adapter sits on:
+
+   ```dotenv
+   HF_MODEL_ID=models/vit5-news-v2          # or models/vit5-news-v2/checkpoint-309
+   HF_BASE_MODEL_ID=VietAI/vit5-base
+   ```
+
+`app/summarizer.py` auto-detects a LoRA adapter and loads `HF_BASE_MODEL_ID` as
+the base; if the adapter folder has no tokenizer it falls back to the base
+model's tokenizer. The only thing fetched from the internet in this case is the
+public `VietAI/vit5-base` base model (cached after the first run).
 
 ## Run the Web Demo
 
@@ -151,9 +185,15 @@ The FastAPI is exposed at <http://localhost:8000>.
 
 ## Build Dataset Artifacts
 
+> **Already included:** the curated training data ships with the repo at
+> `data/datasets/v2/` (`train.jsonl` 1636 / `val.jsonl` 218 / `test.jsonl` 216),
+> so you can go straight to **Fine-tuning** without re-running the pipeline below.
+> Follow these steps only when you want to build a fresh dataset from new crawls.
+
 The labeling pipeline uses **gemini-3.1-flash-lite** via free AI Studio
-API keys. Multiple keys are rotated automatically when one hits the rate
-limit.
+API keys. Keys are rotated **round-robin** — every call starts on a different
+key, so all keys you provide share the load (not just the first few), and a key
+is only skipped for a request when it returns a rate-limit/transient error.
 
 ### Step 1 — Crawl articles for labeling
 
@@ -219,7 +259,7 @@ training values directly in the notebook for readability:
 
 | Variable               | Required | Default           | Description                                       |
 |------------------------|----------|-------------------|---------------------------------------------------|
-| `HF_MODEL_ID`         | Yes      | `VietAI/vit5-base`| Hugging Face model or LoRA adapter ID             |
+| `HF_MODEL_ID`         | Yes      | `VietAI/vit5-base`| HF repo id **or local path** (e.g. `models/vit5-news-v2`) |
 | `HF_BASE_MODEL_ID`    | No       | *(from adapter)*  | Override base model for PEFT/LoRA adapters        |
 | `HF_TOKEN`            | No       | —                 | Hugging Face token (for private models)           |
 | `MODEL_DEVICE`        | No       | *(auto)*          | Device for inference (`cpu`, `cuda`, `mps`)       |

@@ -38,12 +38,13 @@ OverrideFn = Callable[[str, str], str]
 
 
 class GeminiLabeler:
-    """AI Studio labeler with key rotation and model fallback.
+    """AI Studio labeler with round-robin key rotation and model fallback.
 
-    Each call to :meth:`generate` iterates over a **local copy** of the key
-    list so that concurrent threads (via ``asyncio.to_thread``) never share
-    mutable rotation state.  This avoids race conditions where one thread's
-    quota error cascades into marking other threads' keys as exhausted.
+    Every call to :meth:`generate` starts on a different key (advanced by a
+    shared round-robin cursor) and then tries the remaining keys in order on
+    rate-limit / transient errors.  This spreads load across **all** provided
+    keys instead of hammering ``keys[0]`` until it is exhausted, and it keeps
+    rotation safe for concurrent threads (via ``asyncio.to_thread``).
     """
 
     def __init__(
@@ -63,6 +64,24 @@ class GeminiLabeler:
         self._override = override_callable
         self._clients: dict[str, Any] = {}
         self._clients_lock = threading.Lock()
+        # Round-robin cursor so concurrent calls start on different keys
+        # instead of all hammering keys[0] first.
+        self._rr_lock = threading.Lock()
+        self._rr_counter = 0
+
+    def _key_order(self) -> list[tuple[int, str]]:
+        """Return ``(original_index, key)`` pairs starting at a rotating offset.
+
+        Each call advances a shared counter so that concurrent requests spread
+        their first attempt across all keys, rather than every call starting at
+        ``keys[0]``.  The full key list is still tried on errors, just in a
+        rotated order.
+        """
+        n = len(self._keys)
+        with self._rr_lock:
+            start = self._rr_counter % n
+            self._rr_counter = (self._rr_counter + 1) % n
+        return [((start + i) % n, self._keys[(start + i) % n]) for i in range(n)]
 
     def _get_client(self, api_key: str) -> Any:
         with self._clients_lock:
@@ -81,21 +100,24 @@ class GeminiLabeler:
     def generate(self, *, system: str, user: str) -> str:
         """Generate a label using AI Studio.
 
-        Key rotation and model fallback are handled per-call using local
-        iteration over snapshot copies of keys and models.  This is safe
-        for concurrent use from multiple threads.
+        Keys are tried in round-robin order (see :meth:`_key_order`) with
+        model fallback.  When every key hits a rate-limit/transient error the
+        method raises :class:`GeminiTransientError` so the ``@retry`` decorator
+        backs off and retries instead of failing permanently.
         """
         if self._override is not None:
             return self._override(system, user)
 
         from google.genai import types
 
-        keys = list(self._keys)
         models = list(self._model_chain)
+        n_keys = len(self._keys)
         last_exc: Exception | None = None
+        saw_rate_limit = False
 
         for model_name in models:
-            for key_idx, api_key in enumerate(keys):
+            model_unavailable = False
+            for key_idx, api_key in self._key_order():
                 client = self._get_client(api_key)
                 try:
                     response = client.models.generate_content(
@@ -140,28 +162,32 @@ class GeminiLabeler:
                             "500",
                         )
                     )
-                    if is_quota:
+                    if is_quota or is_transient:
+                        kind = "quota" if is_quota else "transient error"
                         log.warning(
-                            "Key #%d/%d quota hit on %s: %s",
+                            "Key #%d/%d %s on %s, trying next key: %s",
                             key_idx + 1,
-                            len(keys),
+                            n_keys,
+                            kind,
                             model_name,
                             exc,
                         )
                         last_exc = exc
+                        saw_rate_limit = True
                         continue
-                    if is_transient:
-                        raise GeminiTransientError(str(exc)) from exc
                     if "not found" in err or "does not exist" in err or "invalid" in err:
                         log.warning("Model %s not available, trying next: %s", model_name, exc)
                         last_exc = exc
+                        model_unavailable = True
                         break
                     raise GeminiLLMError(str(exc)) from exc
-            else:
-                last_exc = last_exc or RuntimeError(f"All keys exhausted for {model_name}")
+            if model_unavailable:
                 continue
-            continue
 
+        if saw_rate_limit:
+            raise GeminiTransientError(
+                f"All {n_keys} key(s) hit rate-limit/transient errors. Last error: {last_exc}"
+            )
         raise GeminiLLMError(
             f"All models/keys exhausted. Last error: {last_exc}"
         )

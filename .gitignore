@@ -45,7 +45,7 @@ credentials*.json
 /secrets/*.json
 !**/configs/**/*.json
 
-# Data (managed by DVC) — local artefacts, never commit
+# Data — local artefacts, never commit
 /data/raw/*
 /data/interim/
 /data/processed/
@@ -59,9 +59,12 @@ credentials*.json
 !/data/raw/.gitkeep
 !/data/datasets/.gitkeep
 !/data/labeled/.gitkeep
+# The curated v2 dataset is the training input and is committed with the repo.
+!/data/datasets/v2/
+!/data/datasets/v2/*.jsonl
 
-# Models / artifacts
-/models/
+# Models / artifacts — large checkpoints stay local, keep the folder in git.
+/models/*
 !/models/.gitkeep
 mlruns/
 mlflow.db

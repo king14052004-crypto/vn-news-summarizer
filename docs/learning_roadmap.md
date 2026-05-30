@@ -1789,7 +1789,7 @@ def run_qc(*, output: LabelOutput, source_text: str, cfg: QcConfig | None = None
 
 **Mục tiêu:** hiểu google.genai SDK, key rotation, model fallback, retry, thread safety. Code lại `labeling/gemini_labeler.py`.
 
-Mỗi bài tập dưới đây xây dựng **đúng một phần** của file `labeling/gemini_labeler.py` trong dự án. Bạn sẽ viết từng mảnh, rồi bài cuối ghép tất cả lại thành file hoàn chỉnh 182 dòng.
+Mỗi bài tập dưới đây xây dựng **đúng một phần** của file `labeling/gemini_labeler.py` trong dự án. Bạn sẽ viết từng mảnh, rồi bài cuối ghép tất cả lại thành file hoàn chỉnh 206 dòng.
 
 ### Lý thuyết
 
@@ -1811,21 +1811,21 @@ response = client.models.generate_content(
 print(response.text)
 ```
 
-**3. Key rotation:** khi key bị rate limit → tự chuyển sang key tiếp theo trong danh sách.
+**3. Key rotation (round-robin):** mỗi lần gọi `generate()` bắt đầu từ một key khác nhau (nhờ con trỏ round-robin dùng chung) rồi mới thử các key còn lại khi gặp lỗi rate limit. Nhờ vậy **tất cả** key đều được dùng đều nhau, không dồn hết vào key đầu rồi mới sang key sau.
 
 **4. Model mặc định:** `gemini-3.1-flash-lite` (free-tier: 15 RPM, 500 RPD/project).
 
 **5. Error classification (inline):** phân loại lỗi ngay trong vòng lặp:
-- quota → `continue` (thử key tiếp)
-- transient → `raise GeminiTransientError` (tenacity sẽ retry)
+- quota / transient → `continue` (thử key tiếp theo trong vòng round-robin)
 - model not found → `break` (thử model tiếp)
 - fatal → `raise GeminiLLMError` (dừng)
+- Hết tất cả key mà đều quota/transient → `raise GeminiTransientError` để tenacity backoff & retry (cho RPM kịp hồi), thay vì fail vĩnh viễn.
 
 **6. Thread safety:** dùng `threading.Lock` bảo vệ dict `_clients` khi nhiều thread gọi cùng lúc.
 
 **7. `OverrideFn`:** type alias `Callable[[str, str], str]` — cho phép inject function thay thế (override) khi test, không cần gọi API thật.
 
-### Bài tập 5.1 — Imports, constants, exceptions (dòng 1-39 trong dự án)
+### Bài tập 5.1 — Imports, constants, exceptions (dòng 1-37 trong dự án)
 
 **Bối cảnh:** Phần đầu file `gemini_labeler.py` gồm: module docstring, imports, constant `DEFAULT_MODEL_CHAIN`, 2 exception classes, và type alias `OverrideFn`. Đây là nền tảng để xây dựng class `GeminiLabeler`.
 
@@ -1895,9 +1895,9 @@ print(f"Models: {DEFAULT_MODEL_CHAIN}")
 print(f"OverrideFn type: {OverrideFn}")
 ```
 
-**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 1-39 — code phải giống.
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 1-37 — code phải giống.
 
-### Bài tập 5.2 — `_keys_from_env()` (dòng 172-182 trong dự án)
+### Bài tập 5.2 — `_keys_from_env()` (dòng 196-206 trong dự án)
 
 **Bối cảnh:** Đọc API key từ environment. Ưu tiên `GEMINI_API_KEYS` (nhiều key, phân cách dấu phẩy), fallback `GEMINI_API_KEY` (1 key). Nếu không có → raise `GeminiLLMError`. Function này nằm cuối file, ngoài class.
 
@@ -1938,28 +1938,31 @@ except GeminiLLMError as e:
     print(f"OK: {e}")
 ```
 
-**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 172-182 — code phải giống.
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 196-206 — code phải giống.
 
-### Bài tập 5.3 — `GeminiLabeler.__init__` + `_get_client` (dòng 42-75 trong dự án)
+### Bài tập 5.3 — `GeminiLabeler.__init__` + `_key_order` + `_get_client` (dòng 40-92 trong dự án)
 
 **Bối cảnh:** Class `GeminiLabeler` cần:
-- `__init__`: nhận keys, model chain, generation params, override function. Nếu không truyền keys → gọi `_keys_from_env()`.
+- `__init__`: nhận keys, model chain, generation params, override function. Nếu không truyền keys → gọi `_keys_from_env()`. Khởi tạo thêm con trỏ round-robin (`_rr_lock`, `_rr_counter`).
+- `_key_order`: trả danh sách `(index, key)` bắt đầu từ offset xoay vòng — để mỗi request dùng key khác nhau.
 - `_get_client`: cache `genai.Client` per key, thread-safe bằng `threading.Lock`. Import `genai` lazy (trong method, không ở đầu file) vì chỉ cần khi thật sự gọi API.
 
-**Yêu cầu:** Viết class `GeminiLabeler` với `__init__` và `_get_client` — code **đúng như dự án**:
-1. `__init__` nhận 4 keyword-only parameters: `api_keys`, `model_chain`, `params`, `override_callable`.
-2. `_get_client(api_key)`: dùng `threading.Lock`, lazy import `from google import genai`.
+**Yêu cầu:** Viết class `GeminiLabeler` với `__init__`, `_key_order` và `_get_client` — code **đúng như dự án**:
+1. `__init__` nhận 4 keyword-only parameters: `api_keys`, `model_chain`, `params`, `override_callable`; khởi tạo thêm `_rr_lock` + `_rr_counter`.
+2. `_key_order()`: xoay vòng offset bằng `_rr_lock`, trả list `(index, key)`.
+3. `_get_client(api_key)`: dùng `threading.Lock`, lazy import `from google import genai`.
 
 **Đáp án:**
 
 ```python
 class GeminiLabeler:
-    """AI Studio labeler with key rotation and model fallback.
+    """AI Studio labeler with round-robin key rotation and model fallback.
 
-    Each call to :meth:`generate` iterates over a **local copy** of the key
-    list so that concurrent threads (via ``asyncio.to_thread``) never share
-    mutable rotation state.  This avoids race conditions where one thread's
-    quota error cascades into marking other threads' keys as exhausted.
+    Every call to :meth:`generate` starts on a different key (advanced by a
+    shared round-robin cursor) and then tries the remaining keys in order on
+    rate-limit / transient errors.  This spreads load across **all** provided
+    keys instead of hammering ``keys[0]`` until it is exhausted, and it keeps
+    rotation safe for concurrent threads (via ``asyncio.to_thread``).
     """
 
     def __init__(
@@ -1979,6 +1982,24 @@ class GeminiLabeler:
         self._override = override_callable
         self._clients: dict[str, Any] = {}
         self._clients_lock = threading.Lock()
+        # Round-robin cursor so concurrent calls start on different keys
+        # instead of all hammering keys[0] first.
+        self._rr_lock = threading.Lock()
+        self._rr_counter = 0
+
+    def _key_order(self) -> list[tuple[int, str]]:
+        """Return ``(original_index, key)`` pairs starting at a rotating offset.
+
+        Each call advances a shared counter so that concurrent requests spread
+        their first attempt across all keys, rather than every call starting at
+        ``keys[0]``.  The full key list is still tried on errors, just in a
+        rotated order.
+        """
+        n = len(self._keys)
+        with self._rr_lock:
+            start = self._rr_counter % n
+            self._rr_counter = (self._rr_counter + 1) % n
+        return [((start + i) % n, self._keys[(start + i) % n]) for i in range(n)]
 
     def _get_client(self, api_key: str) -> Any:
         with self._clients_lock:
@@ -1999,35 +2020,39 @@ assert labeler._model_chain == ["gemini-3.1-flash-lite"]
 print("OK! GeminiLabeler created.")
 ```
 
-**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 42-75 — code phải giống.
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 40-92 — code phải giống.
 
-### Bài tập 5.4 — Class `GeminiLabeler` hoàn chỉnh: thêm `generate()` (dòng 42-169 trong dự án)
+### Bài tập 5.4 — Class `GeminiLabeler` hoàn chỉnh: thêm `generate()` (dòng 40-193 trong dự án)
 
-**Bối cảnh:** Bài 5.3 bạn đã viết class `GeminiLabeler` với `__init__` và `_get_client`. Bây giờ thêm method `generate()` — trái tim của class. Method này:
+**Bối cảnh:** Bài 5.3 bạn đã viết class `GeminiLabeler` với `__init__`, `_key_order` và `_get_client`. Bây giờ thêm method `generate()` — trái tim của class. Method này:
 1. `@retry` decorator từ tenacity — chỉ retry `GeminiTransientError`, exponential backoff 2-60s, tối đa 6 lần.
 2. Check `override_callable` → nếu có thì trả kết quả ngay, không gọi API.
-3. Copy `self._keys`, `self._model_chain` ra biến local (thread-safe).
-4. Nested loop: `for model_name in models` → `for key_idx, api_key in enumerate(keys)`.
+3. Lấy thứ tự key round-robin bằng `self._key_order()` (mỗi lần gọi bắt đầu từ key khác nhau).
+4. Nested loop: `for model_name in models` → `for key_idx, api_key in self._key_order()`.
 5. Gọi API: `client.models.generate_content(...)` với config từ `self.params`.
 6. Error classification inline:
-   - quota → `continue` (thử key tiếp)
-   - transient → `raise GeminiTransientError` (tenacity retry)
-   - model not found → `break` (thử model tiếp)
+   - quota / transient → `continue` (thử key tiếp theo), bật cờ `saw_rate_limit`
+   - model not found → `break` + cờ `model_unavailable` (thử model tiếp)
    - fatal → `raise GeminiLLMError`
-7. `for...else` pattern: tất cả keys bị quota → `else: continue` → thử model tiếp.
-8. Hết tất cả → `raise GeminiLLMError("All models/keys exhausted...")`.
+7. Hết tất cả key/model mà đều quota/transient (`saw_rate_limit`) → `raise GeminiTransientError` để tenacity backoff & retry.
+8. Trường hợp còn lại → `raise GeminiLLMError("All models/keys exhausted...")`.
 
-**Gợi ý về `for...else` pattern:**
+**Gợi ý về round-robin + cờ `model_unavailable`:**
 ```python
-for key in keys:
-    try:
-        return call(key)  # thành công → return
-    except QuotaError:
-        continue          # thử key tiếp
-else:
-    # Block else chạy khi for loop kết thúc KHÔNG bị break
-    # Tức là tất cả keys đều bị quota → continue outer loop (thử model tiếp)
-    continue
+def _key_order(self):
+    n = len(self._keys)
+    with self._rr_lock:
+        start = self._rr_counter % n
+        self._rr_counter = (self._rr_counter + 1) % n
+    return [((start + i) % n, self._keys[(start + i) % n]) for i in range(n)]
+
+# Trong generate(): mỗi request bắt đầu ở một key khác nhau
+for model_name in models:
+    model_unavailable = False
+    for key_idx, api_key in self._key_order():
+        ...  # quota/transient → continue; model not found → break + set cờ
+    if model_unavailable:
+        continue  # thử model tiếp
 ```
 
 **Yêu cầu:** Viết lại class `GeminiLabeler` **hoàn chỉnh** — bao gồm `__init__` + `_get_client` (bài 5.3) + thêm `generate()`. Code **đúng như dự án**.
@@ -2036,12 +2061,13 @@ else:
 
 ```python
 class GeminiLabeler:
-    """AI Studio labeler with key rotation and model fallback.
+    """AI Studio labeler with round-robin key rotation and model fallback.
 
-    Each call to :meth:`generate` iterates over a **local copy** of the key
-    list so that concurrent threads (via ``asyncio.to_thread``) never share
-    mutable rotation state.  This avoids race conditions where one thread's
-    quota error cascades into marking other threads' keys as exhausted.
+    Every call to :meth:`generate` starts on a different key (advanced by a
+    shared round-robin cursor) and then tries the remaining keys in order on
+    rate-limit / transient errors.  This spreads load across **all** provided
+    keys instead of hammering ``keys[0]`` until it is exhausted, and it keeps
+    rotation safe for concurrent threads (via ``asyncio.to_thread``).
     """
 
     def __init__(
@@ -2061,6 +2087,24 @@ class GeminiLabeler:
         self._override = override_callable
         self._clients: dict[str, Any] = {}
         self._clients_lock = threading.Lock()
+        # Round-robin cursor so concurrent calls start on different keys
+        # instead of all hammering keys[0] first.
+        self._rr_lock = threading.Lock()
+        self._rr_counter = 0
+
+    def _key_order(self) -> list[tuple[int, str]]:
+        """Return ``(original_index, key)`` pairs starting at a rotating offset.
+
+        Each call advances a shared counter so that concurrent requests spread
+        their first attempt across all keys, rather than every call starting at
+        ``keys[0]``.  The full key list is still tried on errors, just in a
+        rotated order.
+        """
+        n = len(self._keys)
+        with self._rr_lock:
+            start = self._rr_counter % n
+            self._rr_counter = (self._rr_counter + 1) % n
+        return [((start + i) % n, self._keys[(start + i) % n]) for i in range(n)]
 
     def _get_client(self, api_key: str) -> Any:
         with self._clients_lock:
@@ -2079,21 +2123,24 @@ class GeminiLabeler:
     def generate(self, *, system: str, user: str) -> str:
         """Generate a label using AI Studio.
 
-        Key rotation and model fallback are handled per-call using local
-        iteration over snapshot copies of keys and models.  This is safe
-        for concurrent use from multiple threads.
+        Keys are tried in round-robin order (see :meth:`_key_order`) with
+        model fallback.  When every key hits a rate-limit/transient error the
+        method raises :class:`GeminiTransientError` so the ``@retry`` decorator
+        backs off and retries instead of failing permanently.
         """
         if self._override is not None:
             return self._override(system, user)
 
         from google.genai import types
 
-        keys = list(self._keys)
         models = list(self._model_chain)
+        n_keys = len(self._keys)
         last_exc: Exception | None = None
+        saw_rate_limit = False
 
         for model_name in models:
-            for key_idx, api_key in enumerate(keys):
+            model_unavailable = False
+            for key_idx, api_key in self._key_order():
                 client = self._get_client(api_key)
                 try:
                     response = client.models.generate_content(
@@ -2138,28 +2185,32 @@ class GeminiLabeler:
                             "500",
                         )
                     )
-                    if is_quota:
+                    if is_quota or is_transient:
+                        kind = "quota" if is_quota else "transient error"
                         log.warning(
-                            "Key #%d/%d quota hit on %s: %s",
+                            "Key #%d/%d %s on %s, trying next key: %s",
                             key_idx + 1,
-                            len(keys),
+                            n_keys,
+                            kind,
                             model_name,
                             exc,
                         )
                         last_exc = exc
+                        saw_rate_limit = True
                         continue
-                    if is_transient:
-                        raise GeminiTransientError(str(exc)) from exc
                     if "not found" in err or "does not exist" in err or "invalid" in err:
                         log.warning("Model %s not available, trying next: %s", model_name, exc)
                         last_exc = exc
+                        model_unavailable = True
                         break
                     raise GeminiLLMError(str(exc)) from exc
-            else:
-                last_exc = last_exc or RuntimeError(f"All keys exhausted for {model_name}")
+            if model_unavailable:
                 continue
-            continue
 
+        if saw_rate_limit:
+            raise GeminiTransientError(
+                f"All {n_keys} key(s) hit rate-limit/transient errors. Last error: {last_exc}"
+            )
         raise GeminiLLMError(
             f"All models/keys exhausted. Last error: {last_exc}"
         )
@@ -2175,11 +2226,11 @@ assert result == '{"summary":"test","confidence":0.9}'
 print(f"OK! generate() trả: {result}")
 ```
 
-**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 42-169 — class phải giống 100%.
+**So sánh dự án:** Mở `labeling/gemini_labeler.py` dòng 40-193 — class phải giống 100%.
 
 ### 🎯 Bài cuối chặng 5 — Code lại `labeling/gemini_labeler.py`
 
-**Yêu cầu:** Ghép bài 5.1 (imports/constants/exceptions) + 5.4 (class GeminiLabeler hoàn chỉnh) + 5.2 (_keys_from_env) thành file `labeling/gemini_labeler.py` hoàn chỉnh (182 dòng). Bỏ phần test, chỉ giữ code.
+**Yêu cầu:** Ghép bài 5.1 (imports/constants/exceptions) + 5.4 (class GeminiLabeler hoàn chỉnh) + 5.2 (_keys_from_env) thành file `labeling/gemini_labeler.py` hoàn chỉnh (206 dòng). Bỏ phần test, chỉ giữ code.
 
 **Đáp án — file hoàn chỉnh:**
 
@@ -2224,12 +2275,13 @@ OverrideFn = Callable[[str, str], str]
 
 
 class GeminiLabeler:
-    """AI Studio labeler with key rotation and model fallback.
+    """AI Studio labeler with round-robin key rotation and model fallback.
 
-    Each call to :meth:`generate` iterates over a **local copy** of the key
-    list so that concurrent threads (via ``asyncio.to_thread``) never share
-    mutable rotation state.  This avoids race conditions where one thread's
-    quota error cascades into marking other threads' keys as exhausted.
+    Every call to :meth:`generate` starts on a different key (advanced by a
+    shared round-robin cursor) and then tries the remaining keys in order on
+    rate-limit / transient errors.  This spreads load across **all** provided
+    keys instead of hammering ``keys[0]`` until it is exhausted, and it keeps
+    rotation safe for concurrent threads (via ``asyncio.to_thread``).
     """
 
     def __init__(
@@ -2249,6 +2301,24 @@ class GeminiLabeler:
         self._override = override_callable
         self._clients: dict[str, Any] = {}
         self._clients_lock = threading.Lock()
+        # Round-robin cursor so concurrent calls start on different keys
+        # instead of all hammering keys[0] first.
+        self._rr_lock = threading.Lock()
+        self._rr_counter = 0
+
+    def _key_order(self) -> list[tuple[int, str]]:
+        """Return ``(original_index, key)`` pairs starting at a rotating offset.
+
+        Each call advances a shared counter so that concurrent requests spread
+        their first attempt across all keys, rather than every call starting at
+        ``keys[0]``.  The full key list is still tried on errors, just in a
+        rotated order.
+        """
+        n = len(self._keys)
+        with self._rr_lock:
+            start = self._rr_counter % n
+            self._rr_counter = (self._rr_counter + 1) % n
+        return [((start + i) % n, self._keys[(start + i) % n]) for i in range(n)]
 
     def _get_client(self, api_key: str) -> Any:
         with self._clients_lock:
@@ -2267,21 +2337,24 @@ class GeminiLabeler:
     def generate(self, *, system: str, user: str) -> str:
         """Generate a label using AI Studio.
 
-        Key rotation and model fallback are handled per-call using local
-        iteration over snapshot copies of keys and models.  This is safe
-        for concurrent use from multiple threads.
+        Keys are tried in round-robin order (see :meth:`_key_order`) with
+        model fallback.  When every key hits a rate-limit/transient error the
+        method raises :class:`GeminiTransientError` so the ``@retry`` decorator
+        backs off and retries instead of failing permanently.
         """
         if self._override is not None:
             return self._override(system, user)
 
         from google.genai import types
 
-        keys = list(self._keys)
         models = list(self._model_chain)
+        n_keys = len(self._keys)
         last_exc: Exception | None = None
+        saw_rate_limit = False
 
         for model_name in models:
-            for key_idx, api_key in enumerate(keys):
+            model_unavailable = False
+            for key_idx, api_key in self._key_order():
                 client = self._get_client(api_key)
                 try:
                     response = client.models.generate_content(
@@ -2326,28 +2399,32 @@ class GeminiLabeler:
                             "500",
                         )
                     )
-                    if is_quota:
+                    if is_quota or is_transient:
+                        kind = "quota" if is_quota else "transient error"
                         log.warning(
-                            "Key #%d/%d quota hit on %s: %s",
+                            "Key #%d/%d %s on %s, trying next key: %s",
                             key_idx + 1,
-                            len(keys),
+                            n_keys,
+                            kind,
                             model_name,
                             exc,
                         )
                         last_exc = exc
+                        saw_rate_limit = True
                         continue
-                    if is_transient:
-                        raise GeminiTransientError(str(exc)) from exc
                     if "not found" in err or "does not exist" in err or "invalid" in err:
                         log.warning("Model %s not available, trying next: %s", model_name, exc)
                         last_exc = exc
+                        model_unavailable = True
                         break
                     raise GeminiLLMError(str(exc)) from exc
-            else:
-                last_exc = last_exc or RuntimeError(f"All keys exhausted for {model_name}")
+            if model_unavailable:
                 continue
-            continue
 
+        if saw_rate_limit:
+            raise GeminiTransientError(
+                f"All {n_keys} key(s) hit rate-limit/transient errors. Last error: {last_exc}"
+            )
         raise GeminiLLMError(
             f"All models/keys exhausted. Last error: {last_exc}"
         )
